@@ -165,33 +165,16 @@ public final class SensorLoggerTrackLoader {
     }
 
     private GroundReference reference(List<LocationSample> locations, List<BarometerSample> barometer) {
-        int count = 0;
-        double lat = 0.0;
-        double lon = 0.0;
-        int limit = Math.min(locations.size(), 300);
-        for (int i = 0; i < limit; i++) {
-            LocationSample sample = locations.get(i);
-            double speed = Double.isNaN(sample.speedMetersPerSecond()) ? 0.0 : sample.speedMetersPerSecond();
-            if (speed <= 1.0) {
-                lat += sample.latitude();
-                lon += sample.longitude();
-                count++;
+        LocationSample lowestLocation = locations.get(0);
+        double lowestAltitude = altitude(lowestLocation, barometer);
+        for (LocationSample location : locations) {
+            double candidateAltitude = altitude(location, barometer);
+            if (!Double.isNaN(candidateAltitude) && (Double.isNaN(lowestAltitude) || candidateAltitude < lowestAltitude)) {
+                lowestLocation = location;
+                lowestAltitude = candidateAltitude;
             }
         }
-        LocationSample first = locations.get(0);
-        double referenceLatitude = count == 0 ? first.latitude() : lat / count;
-        double referenceLongitude = count == 0 ? first.longitude() : lon / count;
-        return new GroundReference(referenceLatitude, referenceLongitude, lowestAltitude(locations, barometer));
-    }
-
-    private double lowestAltitude(List<LocationSample> locations, List<BarometerSample> barometer) {
-        double lowest = Double.POSITIVE_INFINITY;
-        for (LocationSample location : locations) {
-            double altitude = altitude(location, barometer);
-            if (!Double.isNaN(altitude)) lowest = Math.min(lowest, altitude);
-        }
-        if (!Double.isInfinite(lowest)) return lowest;
-        return altitude(locations.get(0), barometer);
+        return new GroundReference(lowestLocation.latitude(), lowestLocation.longitude(), lowestAltitude);
     }
 
     private List<TrackPoint> points(List<LocationSample> locations, List<BarometerSample> barometer, GroundReference ref) {
