@@ -166,11 +166,11 @@ public final class TrackRenderer {
             glBindVertexArray(trackVao);
             glLineWidth(3.0f);
             if (splitIndex > 0) {
-                glUniform3f(colorUniform, 0.45f, 0.45f, 0.45f);
+                glUniform3f(colorUniform, 1.0f, 0.9f, 0.05f);
                 glDrawArrays(GL_LINE_STRIP, 0, splitIndex + 1);
             }
             if (splitIndex < pointCount - 1) {
-                glUniform3f(colorUniform, 1.0f, 0.9f, 0.05f);
+                glUniform3f(colorUniform, 0.45f, 0.45f, 0.45f);
                 glDrawArrays(GL_LINE_STRIP, splitIndex, pointCount - splitIndex);
             }
         }
