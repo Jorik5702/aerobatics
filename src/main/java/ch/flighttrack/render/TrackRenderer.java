@@ -62,6 +62,7 @@ public final class TrackRenderer {
     private float centerX;
     private float centerY;
     private float centerZ;
+    private float modelRadius = 2.0f;
 
     public void init() {
         glEnable(GL_DEPTH_TEST);
@@ -78,6 +79,10 @@ public final class TrackRenderer {
         uploadOrigin();
     }
 
+    public float modelRadius() {
+        return modelRadius;
+    }
+
     public void uploadTrack(List<TrackPoint> points) {
         pointCount = points.size();
         if (points.isEmpty()) return;
@@ -86,8 +91,12 @@ public final class TrackRenderer {
         centerX = (bounds.minX + bounds.maxX) * 0.5f;
         centerY = (bounds.minY + bounds.maxY) * 0.5f;
         centerZ = (bounds.minZ + bounds.maxZ) * 0.5f;
-        float maxSpan = Math.max(Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY), bounds.maxZ - bounds.minZ);
-        trackScale = maxSpan <= 0.0f ? 1.0f : 2.5f / maxSpan;
+        float spanX = bounds.maxX - bounds.minX;
+        float spanY = bounds.maxY - bounds.minY;
+        float spanZ = bounds.maxZ - bounds.minZ;
+        float maxSpan = Math.max(Math.max(spanX, spanY), spanZ);
+        trackScale = maxSpan <= 0.0f ? 1.0f : 3.6f / maxSpan;
+        modelRadius = Math.max(1.8f, Math.max(Math.max(spanX, spanY), spanZ) * trackScale * 0.65f);
 
         FloatBuffer vertices = BufferUtils.createFloatBuffer(points.size() * 3);
         for (TrackPoint point : points) {
@@ -99,14 +108,14 @@ public final class TrackRenderer {
         uploadBuffer(trackVao, trackVbo, vertices);
     }
 
-    public void render(int width, int height, float yaw, float pitch, float distance) {
+    public void render(int width, int height, float yaw, float pitch, float distance, float panX, float panY) {
         float aspect = height == 0 ? 1.0f : (float) width / (float) height;
-        Mat4f projection = Mat4f.perspective((float) Math.toRadians(55.0), aspect, 0.01f, 100.0f);
+        Mat4f projection = Mat4f.perspective((float) Math.toRadians(42.0), aspect, 0.01f, 100.0f);
         float cosPitch = (float) Math.cos(pitch);
-        float eyeX = (float) (Math.sin(yaw) * cosPitch * distance);
-        float eyeY = (float) (Math.sin(pitch) * distance);
+        float eyeX = (float) (Math.sin(yaw) * cosPitch * distance) + panX;
+        float eyeY = (float) (Math.sin(pitch) * distance) + panY;
         float eyeZ = (float) (Math.cos(yaw) * cosPitch * distance);
-        Mat4f view = Mat4f.lookAt(eyeX, eyeY, eyeZ, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f);
+        Mat4f view = Mat4f.lookAt(eyeX, eyeY, eyeZ, panX, panY, 0.0f, 0.0f, 1.0f, 0.0f);
         FloatBuffer mvp = BufferUtils.createFloatBuffer(16);
         mvp.put(projection.multiply(view).values()).flip();
 
@@ -115,11 +124,11 @@ public final class TrackRenderer {
 
         glBindVertexArray(axesVao);
         glLineWidth(2.0f);
-        glUniform3f(colorUniform, 0.7f, 0.7f, 0.7f);
+        glUniform3f(colorUniform, 0.45f, 0.48f, 0.52f);
         glDrawArrays(GL_LINES, 0, 6);
 
         glBindVertexArray(originVao);
-        glPointSize(8.0f);
+        glPointSize(9.0f);
         glUniform3f(colorUniform, 1.0f, 0.95f, 0.2f);
         glDrawArrays(GL_POINTS, 0, 1);
 
@@ -146,9 +155,9 @@ public final class TrackRenderer {
 
     private void uploadAxes() {
         float[] axes = {
-                -2.0f, 0.0f, 0.0f, 2.0f, 0.0f, 0.0f,
-                0.0f, -2.0f, 0.0f, 0.0f, 2.0f, 0.0f,
-                0.0f, 0.0f, -2.0f, 0.0f, 0.0f, 2.0f
+                -2.2f, 0.0f, 0.0f, 2.2f, 0.0f, 0.0f,
+                0.0f, -2.2f, 0.0f, 0.0f, 2.2f, 0.0f,
+                0.0f, 0.0f, -2.2f, 0.0f, 0.0f, 2.2f
         };
         FloatBuffer vertices = BufferUtils.createFloatBuffer(axes.length);
         vertices.put(axes).flip();
