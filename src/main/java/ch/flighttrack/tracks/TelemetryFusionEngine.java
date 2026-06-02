@@ -27,6 +27,7 @@ final class TelemetryFusionEngine {
         AccelBias bias = estimateBias(accelerometer, startTime);
         Mount mount = detectMount(gravity, startTime);
         OrientationDiagnostic orientationDiagnostic = diagnoseOrientation(orientation, startTime);
+        String attitudeDiagnostic = new AttitudeDiagnostics().diagnose(locations, orientation, startTime);
         VectorDiagnostic magneticDiagnostic = diagnoseVector("magnetometer", magnetometer, startTime);
         VectorDiagnostic uncalibratedAccelDiagnostic = diagnoseVector("accelerometer uncalibrated", accelerometerUncalibrated, startTime);
         GroundReference reference = lowestReference(locations, barometer, accelerometer, gravity, startTime);
@@ -39,6 +40,7 @@ final class TelemetryFusionEngine {
         System.out.println("IMU/orientation/magnetometer are parsed for diagnostics only until the EKF orientation model is implemented.");
         System.out.printf("Phone mount diagnostic: %s%n", mount.description());
         System.out.printf("Orientation diagnostic: %s%n", orientationDiagnostic.description());
+        System.out.printf("Attitude/GPS course diagnostic: %s%n", attitudeDiagnostic);
         System.out.printf("Magnetometer diagnostic: %s%n", magneticDiagnostic.description());
         System.out.printf("Uncalibrated accelerometer diagnostic: %s%n", uncalibratedAccelDiagnostic.description());
         System.out.printf("Accelerometer initial bias diagnostic: x=%.4f, y=%.4f, z=%.4f%n", bias.x(), bias.y(), bias.z());
