@@ -87,7 +87,7 @@ public final class TrackRenderer {
         uploadAxes();
         uploadGround(2.2f);
         uploadOrigin();
-        uploadPlane(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+        uploadPlane(0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
     }
 
     public float modelRadius() {
@@ -135,7 +135,8 @@ public final class TrackRenderer {
         float pitch = Double.isNaN(current.pitchRadians())
                 ? (float) Math.atan2(dy, Math.max(0.0001f, (float) Math.hypot(dx, dz)))
                 : (float) current.pitchRadians();
-        uploadPlane(x, y, z, heading, pitch);
+        float roll = Double.isNaN(current.rollRadians()) ? 0.0f : (float) current.rollRadians();
+        uploadPlane(x, y, z, heading, pitch, roll);
     }
 
     public void render(int width, int height, float yaw, float pitch, float distance, float panX, float panY, int currentIndex) {
@@ -254,19 +255,33 @@ public final class TrackRenderer {
         uploadBuffer(originVao, originVbo, vertices);
     }
 
-    private void uploadPlane(float x, float y, float z, float heading, float pitch) {
+    private void uploadPlane(float x, float y, float z, float heading, float pitch, float roll) {
         float length = 0.12f;
         float width = 0.08f;
         float sinHeading = (float) Math.sin(heading);
         float cosHeading = (float) Math.cos(heading);
         float sinPitch = (float) Math.sin(pitch);
         float cosPitch = (float) Math.cos(pitch);
+        float sinRoll = (float) Math.sin(roll);
+        float cosRoll = (float) Math.cos(roll);
 
         float forwardX = sinHeading * cosPitch;
         float forwardY = sinPitch;
         float forwardZ = -cosHeading * cosPitch;
-        float rightX = cosHeading;
-        float rightZ = sinHeading;
+        float levelRightX = cosHeading;
+        float levelRightY = 0.0f;
+        float levelRightZ = sinHeading;
+        float levelUpX = levelRightY * forwardZ - levelRightZ * forwardY;
+        float levelUpY = levelRightZ * forwardX - levelRightX * forwardZ;
+        float levelUpZ = levelRightX * forwardY - levelRightY * forwardX;
+        float levelUpLength = Math.max(0.0001f, (float) Math.sqrt(levelUpX * levelUpX + levelUpY * levelUpY + levelUpZ * levelUpZ));
+        levelUpX /= levelUpLength;
+        levelUpY /= levelUpLength;
+        levelUpZ /= levelUpLength;
+
+        float rolledRightX = levelRightX * cosRoll + levelUpX * sinRoll;
+        float rolledRightY = levelRightY * cosRoll + levelUpY * sinRoll;
+        float rolledRightZ = levelRightZ * cosRoll + levelUpZ * sinRoll;
 
         float noseX = x + forwardX * length;
         float noseY = y + forwardY * length;
@@ -274,15 +289,17 @@ public final class TrackRenderer {
         float tailX = x - forwardX * length * 0.45f;
         float tailY = y - forwardY * length * 0.45f;
         float tailZ = z - forwardZ * length * 0.45f;
-        float leftX = tailX - rightX * width;
-        float leftZ = tailZ - rightZ * width;
-        float rightWingX = tailX + rightX * width;
-        float rightWingZ = tailZ + rightZ * width;
+        float leftX = tailX - rolledRightX * width;
+        float leftY = tailY - rolledRightY * width;
+        float leftZ = tailZ - rolledRightZ * width;
+        float rightWingX = tailX + rolledRightX * width;
+        float rightWingY = tailY + rolledRightY * width;
+        float rightWingZ = tailZ + rolledRightZ * width;
 
         FloatBuffer vertices = BufferUtils.createFloatBuffer(9);
         vertices.put(noseX).put(noseY).put(noseZ);
-        vertices.put(leftX).put(tailY).put(leftZ);
-        vertices.put(rightWingX).put(tailY).put(rightWingZ);
+        vertices.put(leftX).put(leftY).put(leftZ);
+        vertices.put(rightWingX).put(rightWingY).put(rightWingZ);
         vertices.flip();
         uploadBuffer(planeVao, planeVbo, vertices);
     }
