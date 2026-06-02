@@ -12,6 +12,7 @@ import javax.swing.JSlider;
 import javax.swing.SwingUtilities;
 import java.awt.BorderLayout;
 import java.awt.GridLayout;
+import java.lang.reflect.InvocationTargetException;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -62,7 +63,7 @@ public final class AnimationPanel {
         frame.setContentPane(root);
         frame.setSize(460, 260);
         frame.setLocationByPlatform(true);
-        frame.setDefaultCloseOperation(JFrame.HIDE_ON_CLOSE);
+        frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
 
         playButton.addActionListener(event -> togglePlaying());
         timeSlider.addChangeListener(event -> {
@@ -82,7 +83,27 @@ public final class AnimationPanel {
     }
 
     public void close() {
-        SwingUtilities.invokeLater(frame::dispose);
+        synchronized (lock) {
+            playing = false;
+        }
+
+        Runnable dispose = () -> {
+            frame.setVisible(false);
+            frame.dispose();
+        };
+
+        if (SwingUtilities.isEventDispatchThread()) {
+            dispose.run();
+            return;
+        }
+
+        try {
+            SwingUtilities.invokeAndWait(dispose);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+        } catch (InvocationTargetException exception) {
+            throw new IllegalStateException("Unable to dispose animation panel", exception);
+        }
     }
 
     public void setTrack(LoadedTrackData trackData) {
