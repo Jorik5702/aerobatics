@@ -128,7 +128,9 @@ public final class TrackRenderer {
         float z = transformZ(current);
         float dx = transformX(next) - transformX(previous);
         float dz = transformZ(next) - transformZ(previous);
-        float heading = (float) Math.atan2(dx, -dz);
+        float heading = Double.isNaN(current.headingRadians())
+                ? (float) Math.atan2(dx, -dz)
+                : (float) current.headingRadians();
         uploadPlane(x, y, z, heading);
     }
 
