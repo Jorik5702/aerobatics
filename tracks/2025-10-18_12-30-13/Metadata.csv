@@ -1,0 +1,2 @@
+version,device name,recording epoch time,recording time,recording timezone,platform,appVersion,device id,sensors,sampleRateMs,standardisation
+3,iPhone 7 Plus,1760790613125,2025-10-18_12-30-13,Europe/Zurich,ios,1.47.1,c043c9b0-3ff3-4353-96d2-0b4ea0cb628d,Accelerometer|Gravity|Gyroscope|Orientation|Magnetometer|Barometer|Location|Watch Location|Watch Barometer|Watch Magnetometer|Annotation|MagnetometerUncalibrated|GyroscopeUncalibrated|AccelerometerUncalibrated,0|0|0|0|0|0|0|10|10|10||0|0|0,false
