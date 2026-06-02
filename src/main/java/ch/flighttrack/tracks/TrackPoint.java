@@ -13,7 +13,8 @@ public record TrackPoint(
         double zMeters,
         boolean moving,
         double headingRadians,
-        double pitchRadians
+        double pitchRadians,
+        double rollRadians
 ) {
     public TrackPoint(
             long timeNanos,
@@ -29,7 +30,7 @@ public record TrackPoint(
             boolean moving
     ) {
         this(timeNanos, secondsElapsed, latitude, longitude, gpsAltitudeMeters, barometricAltitudeMeters,
-                speedMetersPerSecond, xMeters, yMeters, zMeters, moving, Double.NaN, Double.NaN);
+                speedMetersPerSecond, xMeters, yMeters, zMeters, moving, Double.NaN, Double.NaN, Double.NaN);
     }
 
     public TrackPoint(
@@ -47,6 +48,25 @@ public record TrackPoint(
             double headingRadians
     ) {
         this(timeNanos, secondsElapsed, latitude, longitude, gpsAltitudeMeters, barometricAltitudeMeters,
-                speedMetersPerSecond, xMeters, yMeters, zMeters, moving, headingRadians, Double.NaN);
+                speedMetersPerSecond, xMeters, yMeters, zMeters, moving, headingRadians, Double.NaN, Double.NaN);
+    }
+
+    public TrackPoint(
+            long timeNanos,
+            double secondsElapsed,
+            double latitude,
+            double longitude,
+            double gpsAltitudeMeters,
+            double barometricAltitudeMeters,
+            double speedMetersPerSecond,
+            double xMeters,
+            double yMeters,
+            double zMeters,
+            boolean moving,
+            double headingRadians,
+            double pitchRadians
+    ) {
+        this(timeNanos, secondsElapsed, latitude, longitude, gpsAltitudeMeters, barometricAltitudeMeters,
+                speedMetersPerSecond, xMeters, yMeters, zMeters, moving, headingRadians, pitchRadians, Double.NaN);
     }
 }
