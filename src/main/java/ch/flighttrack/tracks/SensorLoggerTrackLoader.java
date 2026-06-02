@@ -49,14 +49,16 @@ public final class SensorLoggerTrackLoader {
         List<LocationSample> allLocations = readLocations(locationFile);
         if (allLocations.isEmpty()) throw new IOException("Location.csv contains no usable location samples");
 
-        List<BarometerSample> barometer = List.of();
-        Optional<Path> barometerFile = files.csv("Barometer.csv");
-        if (barometerFile.isPresent()) barometer = readBarometer(barometerFile.get());
+        Path barometerFile = files.csv("Barometer.csv")
+                .orElseThrow(() -> new IOException("Barometer.csv is required because altitude is always taken from barometric data"));
+        List<BarometerSample> barometer = readBarometer(barometerFile);
+        if (barometer.isEmpty()) throw new IOException("Barometer.csv contains no usable altitude samples");
 
         int stableStart = stableStartIndex(allLocations, barometer);
         List<LocationSample> locations = List.copyOf(allLocations.subList(stableStart, allLocations.size()));
         GroundReference reference = reference(locations, barometer);
         List<TrackPoint> points = points(locations, barometer, reference);
+        if (points.isEmpty()) throw new IOException("No usable track points with barometric altitude found");
         return new LoadedTrackData(files.summary(), reference, points, files.summary().metadata());
     }
 
@@ -164,16 +166,17 @@ public final class SensorLoggerTrackLoader {
         return result;
     }
 
-    private GroundReference reference(List<LocationSample> locations, List<BarometerSample> barometer) {
-        LocationSample lowestLocation = locations.get(0);
-        double lowestAltitude = altitude(lowestLocation, barometer);
+    private GroundReference reference(List<LocationSample> locations, List<BarometerSample> barometer) throws IOException {
+        LocationSample lowestLocation = null;
+        double lowestAltitude = Double.NaN;
         for (LocationSample location : locations) {
             double candidateAltitude = altitude(location, barometer);
-            if (!Double.isNaN(candidateAltitude) && (Double.isNaN(lowestAltitude) || candidateAltitude < lowestAltitude)) {
+            if (!Double.isNaN(candidateAltitude) && (lowestLocation == null || candidateAltitude < lowestAltitude)) {
                 lowestLocation = location;
                 lowestAltitude = candidateAltitude;
             }
         }
+        if (lowestLocation == null) throw new IOException("No barometric altitude could be matched to location samples");
         return new GroundReference(lowestLocation.latitude(), lowestLocation.longitude(), lowestAltitude);
     }
 
@@ -181,6 +184,7 @@ public final class SensorLoggerTrackLoader {
         List<TrackPoint> result = new ArrayList<>();
         for (LocationSample loc : locations) {
             double baro = altitude(loc, barometer);
+            if (Double.isNaN(baro)) continue;
             double x = Math.toRadians(loc.longitude() - ref.longitude()) * EARTH_RADIUS_METERS * Math.cos(Math.toRadians(ref.latitude()));
             double y = Math.toRadians(loc.latitude() - ref.latitude()) * EARTH_RADIUS_METERS;
             double z = baro - ref.barometricAltitudeMeters();
@@ -191,9 +195,8 @@ public final class SensorLoggerTrackLoader {
     }
 
     private double altitude(LocationSample sample, List<BarometerSample> barometer) {
-        if (barometer.isEmpty()) return sample.gpsAltitudeMeters();
         BarometerSample nearest = nearest(sample.timeNanos(), barometer);
-        return nearest == null ? sample.gpsAltitudeMeters() : nearest.altitudeMeters();
+        return nearest == null ? Double.NaN : nearest.altitudeMeters();
     }
 
     private BarometerSample nearest(long time, List<BarometerSample> samples) {
