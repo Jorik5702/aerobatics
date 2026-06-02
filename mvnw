@@ -1,36 +1,45 @@
 #!/bin/sh
 # ----------------------------------------------------------------------------
-# Apache Maven Wrapper startup script, simplified for this project.
+# Self-contained Maven startup script for this project.
+# Downloads Apache Maven if it is not already available in .mvn/wrapper/dists.
 # ----------------------------------------------------------------------------
 
 set -e
 
-BASE_DIR=$(cd "$(dirname "$0")" && pwd)
+BASE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 WRAPPER_DIR="$BASE_DIR/.mvn/wrapper"
-WRAPPER_JAR="$WRAPPER_DIR/maven-wrapper.jar"
 WRAPPER_PROPERTIES="$WRAPPER_DIR/maven-wrapper.properties"
+MAVEN_VERSION="3.9.11"
+MAVEN_DIR="$WRAPPER_DIR/dists/apache-maven-$MAVEN_VERSION"
+MAVEN_BIN="$MAVEN_DIR/bin/mvn"
+MAVEN_ZIP="$WRAPPER_DIR/dists/apache-maven-$MAVEN_VERSION-bin.zip"
 
-if [ -z "$JAVA_HOME" ]; then
-  JAVACMD=$(command -v java)
-else
-  JAVACMD="$JAVA_HOME/bin/java"
-fi
+read_property() {
+  sed -n "s/^$1=//p" "$WRAPPER_PROPERTIES" | tail -n 1
+}
 
-if [ ! -x "$JAVACMD" ]; then
-  echo "Error: JAVA_HOME is not set correctly and java was not found on PATH." >&2
-  exit 1
-fi
+mkdir -p "$WRAPPER_DIR/dists"
 
-if [ ! -f "$WRAPPER_JAR" ]; then
-  WRAPPER_URL=$(sed -n 's/^wrapperUrl=//p' "$WRAPPER_PROPERTIES")
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsSL -o "$WRAPPER_JAR" "$WRAPPER_URL"
-  elif command -v wget >/dev/null 2>&1; then
-    wget -q -O "$WRAPPER_JAR" "$WRAPPER_URL"
-  else
-    echo "Error: curl or wget is required to download the Maven Wrapper jar." >&2
+if [ ! -x "$MAVEN_BIN" ]; then
+  DISTRIBUTION_URL=$(read_property distributionUrl)
+  if [ -z "$DISTRIBUTION_URL" ]; then
+    echo "Error: distributionUrl is missing in $WRAPPER_PROPERTIES" >&2
     exit 1
   fi
+
+  echo "Downloading Apache Maven $MAVEN_VERSION..."
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL -o "$MAVEN_ZIP" "$DISTRIBUTION_URL"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -O "$MAVEN_ZIP" "$DISTRIBUTION_URL"
+  else
+    echo "Error: curl or wget is required to download Apache Maven." >&2
+    exit 1
+  fi
+
+  rm -rf "$MAVEN_DIR"
+  unzip -q "$MAVEN_ZIP" -d "$WRAPPER_DIR/dists"
+  chmod +x "$MAVEN_BIN"
 fi
 
-exec "$JAVACMD" -Dmaven.multiModuleProjectDirectory="$BASE_DIR" -jar "$WRAPPER_JAR" "$@"
+exec "$MAVEN_BIN" -f "$BASE_DIR/pom.xml" "$@"
