@@ -251,7 +251,6 @@ public final class TrackRenderer {
     private void uploadPlane(float x, float y, float z, float heading) {
         float length = 0.12f;
         float width = 0.08f;
-        float lift = 0.03f;
         float sin = (float) Math.sin(heading);
         float cos = (float) Math.cos(heading);
         float noseX = x + sin * length;
@@ -261,9 +260,9 @@ public final class TrackRenderer {
         float rightX = x + cos * width - sin * length * 0.45f;
         float rightZ = z + sin * width + cos * length * 0.45f;
         FloatBuffer vertices = BufferUtils.createFloatBuffer(9);
-        vertices.put(noseX).put(y + lift).put(noseZ);
-        vertices.put(leftX).put(y + lift).put(leftZ);
-        vertices.put(rightX).put(y + lift).put(rightZ);
+        vertices.put(noseX).put(y).put(noseZ);
+        vertices.put(leftX).put(y).put(leftZ);
+        vertices.put(rightX).put(y).put(rightZ);
         vertices.flip();
         uploadBuffer(planeVao, planeVbo, vertices);
     }
