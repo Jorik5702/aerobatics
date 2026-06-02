@@ -11,6 +11,7 @@ import static org.lwjgl.opengl.GL11.GL_FLOAT;
 import static org.lwjgl.opengl.GL11.GL_LINES;
 import static org.lwjgl.opengl.GL11.GL_LINE_STRIP;
 import static org.lwjgl.opengl.GL11.GL_POINTS;
+import static org.lwjgl.opengl.GL11.GL_TRIANGLES;
 import static org.lwjgl.opengl.GL11.glDrawArrays;
 import static org.lwjgl.opengl.GL11.glEnable;
 import static org.lwjgl.opengl.GL11.glLineWidth;
@@ -59,11 +60,12 @@ public final class TrackRenderer {
     private int groundVbo;
     private int originVao;
     private int originVbo;
+    private int planeVao;
+    private int planeVbo;
     private int pointCount;
     private int groundPointCount;
     private float trackScale = 1.0f;
     private float centerX;
-    private float centerY;
     private float centerZ;
     private float modelRadius = 2.0f;
 
@@ -80,9 +82,12 @@ public final class TrackRenderer {
         groundVbo = glGenBuffers();
         originVao = glGenVertexArrays();
         originVbo = glGenBuffers();
+        planeVao = glGenVertexArrays();
+        planeVbo = glGenBuffers();
         uploadAxes();
         uploadGround(2.2f);
         uploadOrigin();
+        uploadPlane(0.0f, 0.0f, 0.0f, 0.0f);
     }
 
     public float modelRadius() {
@@ -95,8 +100,7 @@ public final class TrackRenderer {
 
         Bounds bounds = Bounds.from(points);
         centerX = (bounds.minX + bounds.maxX) * 0.5f;
-        centerY = (bounds.minY + bounds.maxY) * 0.5f;
-        centerZ = (bounds.minZ + bounds.maxZ) * 0.5f;
+        centerZ = (bounds.minY + bounds.maxY) * 0.5f;
         float spanX = bounds.maxX - bounds.minX;
         float spanY = bounds.maxY - bounds.minY;
         float spanZ = bounds.maxZ - bounds.minZ;
@@ -106,15 +110,29 @@ public final class TrackRenderer {
 
         FloatBuffer vertices = BufferUtils.createFloatBuffer(points.size() * 3);
         for (TrackPoint point : points) {
-            vertices.put((float) ((point.xMeters() - centerX) * trackScale));
-            vertices.put((float) (point.zMeters() * trackScale));
-            vertices.put((float) (-(point.yMeters() - centerZ) * trackScale));
+            putTrackVertex(vertices, point);
         }
         vertices.flip();
         uploadBuffer(trackVao, trackVbo, vertices);
+        uploadPlaneForIndex(points, 0);
     }
 
-    public void render(int width, int height, float yaw, float pitch, float distance, float panX, float panY) {
+    public void uploadPlaneForIndex(List<TrackPoint> points, int currentIndex) {
+        if (points.isEmpty()) return;
+        int index = Math.max(0, Math.min(currentIndex, points.size() - 1));
+        TrackPoint current = points.get(index);
+        TrackPoint next = points.get(Math.min(index + 1, points.size() - 1));
+        TrackPoint previous = points.get(Math.max(index - 1, 0));
+        float x = transformX(current);
+        float y = transformY(current);
+        float z = transformZ(current);
+        float dx = transformX(next) - transformX(previous);
+        float dz = transformZ(next) - transformZ(previous);
+        float heading = (float) Math.atan2(dx, -dz);
+        uploadPlane(x, y, z, heading);
+    }
+
+    public void render(int width, int height, float yaw, float pitch, float distance, float panX, float panY, int currentIndex) {
         float aspect = height == 0 ? 1.0f : (float) width / (float) height;
         Mat4f projection = Mat4f.perspective((float) Math.toRadians(42.0), aspect, 0.01f, 100.0f);
         float cosPitch = (float) Math.cos(pitch);
@@ -144,11 +162,22 @@ public final class TrackRenderer {
         glDrawArrays(GL_POINTS, 0, 1);
 
         if (pointCount > 1) {
+            int splitIndex = Math.max(0, Math.min(currentIndex, pointCount - 1));
             glBindVertexArray(trackVao);
             glLineWidth(3.0f);
-            glUniform3f(colorUniform, 1.0f, 0.35f, 0.08f);
-            glDrawArrays(GL_LINE_STRIP, 0, pointCount);
+            if (splitIndex > 0) {
+                glUniform3f(colorUniform, 0.45f, 0.45f, 0.45f);
+                glDrawArrays(GL_LINE_STRIP, 0, splitIndex + 1);
+            }
+            if (splitIndex < pointCount - 1) {
+                glUniform3f(colorUniform, 1.0f, 0.9f, 0.05f);
+                glDrawArrays(GL_LINE_STRIP, splitIndex, pointCount - splitIndex);
+            }
         }
+
+        glBindVertexArray(planeVao);
+        glUniform3f(colorUniform, 0.1f, 0.75f, 1.0f);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
 
         glBindVertexArray(0);
         glUseProgram(0);
@@ -159,11 +188,31 @@ public final class TrackRenderer {
         if (axesVbo != 0) glDeleteBuffers(axesVbo);
         if (groundVbo != 0) glDeleteBuffers(groundVbo);
         if (originVbo != 0) glDeleteBuffers(originVbo);
+        if (planeVbo != 0) glDeleteBuffers(planeVbo);
         if (trackVao != 0) glDeleteVertexArrays(trackVao);
         if (axesVao != 0) glDeleteVertexArrays(axesVao);
         if (groundVao != 0) glDeleteVertexArrays(groundVao);
         if (originVao != 0) glDeleteVertexArrays(originVao);
+        if (planeVao != 0) glDeleteVertexArrays(planeVao);
         if (program != 0) glDeleteProgram(program);
+    }
+
+    private void putTrackVertex(FloatBuffer vertices, TrackPoint point) {
+        vertices.put(transformX(point));
+        vertices.put(transformY(point));
+        vertices.put(transformZ(point));
+    }
+
+    private float transformX(TrackPoint point) {
+        return (float) ((point.xMeters() - centerX) * trackScale);
+    }
+
+    private float transformY(TrackPoint point) {
+        return (float) (point.zMeters() * trackScale);
+    }
+
+    private float transformZ(TrackPoint point) {
+        return (float) (-(point.yMeters() - centerZ) * trackScale);
     }
 
     private void uploadAxes() {
@@ -197,6 +246,26 @@ public final class TrackRenderer {
         FloatBuffer vertices = BufferUtils.createFloatBuffer(3);
         vertices.put(0.0f).put(0.0f).put(0.0f).flip();
         uploadBuffer(originVao, originVbo, vertices);
+    }
+
+    private void uploadPlane(float x, float y, float z, float heading) {
+        float length = 0.12f;
+        float width = 0.08f;
+        float lift = 0.03f;
+        float sin = (float) Math.sin(heading);
+        float cos = (float) Math.cos(heading);
+        float noseX = x + sin * length;
+        float noseZ = z - cos * length;
+        float leftX = x - cos * width - sin * length * 0.45f;
+        float leftZ = z - sin * width + cos * length * 0.45f;
+        float rightX = x + cos * width - sin * length * 0.45f;
+        float rightZ = z + sin * width + cos * length * 0.45f;
+        FloatBuffer vertices = BufferUtils.createFloatBuffer(9);
+        vertices.put(noseX).put(y + lift).put(noseZ);
+        vertices.put(leftX).put(y + lift).put(leftZ);
+        vertices.put(rightX).put(y + lift).put(rightZ);
+        vertices.flip();
+        uploadBuffer(planeVao, planeVbo, vertices);
     }
 
     private void uploadBuffer(int vao, int vbo, FloatBuffer vertices) {
