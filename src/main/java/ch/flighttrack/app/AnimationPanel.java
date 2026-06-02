@@ -25,7 +25,8 @@ public final class AnimationPanel {
     private final JFrame frame = new JFrame("FlightTrack animation");
     private final JLabel gpsLabel = new JLabel("GPS: -");
     private final JLabel speedLabel = new JLabel("Speed: -");
-    private final JLabel heightLabel = new JLabel("Height: -");
+    private final JLabel heightLabel = new JLabel("Relative height: -");
+    private final JLabel absoluteHeightLabel = new JLabel("Absolute height MSL: -");
     private final JLabel absoluteTimeLabel = new JLabel("Absolute time: -");
     private final JLabel relativeTimeLabel = new JLabel("Relative time: -");
     private final JSlider timeSlider = new JSlider(0, SLIDER_MAX, 0);
@@ -44,6 +45,7 @@ public final class AnimationPanel {
         values.add(gpsLabel);
         values.add(speedLabel);
         values.add(heightLabel);
+        values.add(absoluteHeightLabel);
         values.add(absoluteTimeLabel);
         values.add(relativeTimeLabel);
 
@@ -58,7 +60,7 @@ public final class AnimationPanel {
         root.add(values, BorderLayout.CENTER);
         root.add(controls, BorderLayout.SOUTH);
         frame.setContentPane(root);
-        frame.setSize(420, 240);
+        frame.setSize(460, 260);
         frame.setLocationByPlatform(true);
         frame.setDefaultCloseOperation(JFrame.HIDE_ON_CLOSE);
 
@@ -169,7 +171,8 @@ public final class AnimationPanel {
             if (snapshot == null || snapshot.points().isEmpty()) {
                 gpsLabel.setText("GPS: -");
                 speedLabel.setText("Speed: -");
-                heightLabel.setText("Height: -");
+                heightLabel.setText("Relative height: -");
+                absoluteHeightLabel.setText("Absolute height MSL: -");
                 absoluteTimeLabel.setText("Absolute time: -");
                 relativeTimeLabel.setText("Relative time: -");
                 return;
@@ -178,13 +181,19 @@ public final class AnimationPanel {
             TrackPoint point = snapshot.points().get(Math.max(0, Math.min(index, snapshot.points().size() - 1)));
             gpsLabel.setText(String.format("GPS: %.7f, %.7f", point.latitude(), point.longitude()));
             speedLabel.setText(String.format("Speed: %.2f m/s", point.speedMetersPerSecond()));
-            heightLabel.setText(String.format("Height: %.2f m", point.zMeters()));
+            heightLabel.setText(String.format("Relative height: %.2f m", point.zMeters()));
+            absoluteHeightLabel.setText(String.format("Absolute height MSL: %.2f m", absoluteHeightMeters(point)));
             absoluteTimeLabel.setText("Absolute time: " + absoluteTime(point));
             relativeTimeLabel.setText(String.format("Relative time: %.2f / %.2f s", seconds, duration));
             internalSliderUpdate = true;
             timeSlider.setValue(duration <= 0.0 ? 0 : (int) Math.round(SLIDER_MAX * seconds / duration));
             internalSliderUpdate = false;
         });
+    }
+
+    private double absoluteHeightMeters(TrackPoint point) {
+        if (!Double.isNaN(point.barometricAltitudeMeters())) return point.barometricAltitudeMeters();
+        return point.gpsAltitudeMeters();
     }
 
     private String absoluteTime(TrackPoint point) {
