@@ -104,6 +104,7 @@ public final class FlightTrackApp {
             loop();
         } finally {
             cleanup();
+            System.exit(0);
         }
     }
 
