@@ -87,7 +87,7 @@ public final class TrackRenderer {
         uploadAxes();
         uploadGround(2.2f);
         uploadOrigin();
-        uploadPlane(0.0f, 0.0f, 0.0f, 0.0f);
+        uploadPlane(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
     }
 
     public float modelRadius() {
@@ -127,11 +127,15 @@ public final class TrackRenderer {
         float y = transformY(current);
         float z = transformZ(current);
         float dx = transformX(next) - transformX(previous);
+        float dy = transformY(next) - transformY(previous);
         float dz = transformZ(next) - transformZ(previous);
         float heading = Double.isNaN(current.headingRadians())
                 ? (float) Math.atan2(dx, -dz)
                 : (float) current.headingRadians();
-        uploadPlane(x, y, z, heading);
+        float pitch = Double.isNaN(current.pitchRadians())
+                ? (float) Math.atan2(dy, Math.max(0.0001f, (float) Math.hypot(dx, dz)))
+                : (float) current.pitchRadians();
+        uploadPlane(x, y, z, heading, pitch);
     }
 
     public void render(int width, int height, float yaw, float pitch, float distance, float panX, float panY, int currentIndex) {
@@ -250,21 +254,35 @@ public final class TrackRenderer {
         uploadBuffer(originVao, originVbo, vertices);
     }
 
-    private void uploadPlane(float x, float y, float z, float heading) {
+    private void uploadPlane(float x, float y, float z, float heading, float pitch) {
         float length = 0.12f;
         float width = 0.08f;
-        float sin = (float) Math.sin(heading);
-        float cos = (float) Math.cos(heading);
-        float noseX = x + sin * length;
-        float noseZ = z - cos * length;
-        float leftX = x - cos * width - sin * length * 0.45f;
-        float leftZ = z - sin * width + cos * length * 0.45f;
-        float rightX = x + cos * width - sin * length * 0.45f;
-        float rightZ = z + sin * width + cos * length * 0.45f;
+        float sinHeading = (float) Math.sin(heading);
+        float cosHeading = (float) Math.cos(heading);
+        float sinPitch = (float) Math.sin(pitch);
+        float cosPitch = (float) Math.cos(pitch);
+
+        float forwardX = sinHeading * cosPitch;
+        float forwardY = sinPitch;
+        float forwardZ = -cosHeading * cosPitch;
+        float rightX = cosHeading;
+        float rightZ = sinHeading;
+
+        float noseX = x + forwardX * length;
+        float noseY = y + forwardY * length;
+        float noseZ = z + forwardZ * length;
+        float tailX = x - forwardX * length * 0.45f;
+        float tailY = y - forwardY * length * 0.45f;
+        float tailZ = z - forwardZ * length * 0.45f;
+        float leftX = tailX - rightX * width;
+        float leftZ = tailZ - rightZ * width;
+        float rightWingX = tailX + rightX * width;
+        float rightWingZ = tailZ + rightZ * width;
+
         FloatBuffer vertices = BufferUtils.createFloatBuffer(9);
-        vertices.put(noseX).put(y).put(noseZ);
-        vertices.put(leftX).put(y).put(leftZ);
-        vertices.put(rightX).put(y).put(rightZ);
+        vertices.put(noseX).put(noseY).put(noseZ);
+        vertices.put(leftX).put(tailY).put(leftZ);
+        vertices.put(rightWingX).put(tailY).put(rightWingZ);
         vertices.flip();
         uploadBuffer(planeVao, planeVbo, vertices);
     }
