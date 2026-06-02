@@ -132,24 +132,32 @@ public final class SensorLoggerTrackLoader {
 
     private GroundReference reference(List<LocationSample> locations, List<BarometerSample> barometer) {
         int count = 0;
-        double lat = 0.0, lon = 0.0, alt = 0.0, minAlt = Double.POSITIVE_INFINITY, maxAlt = Double.NEGATIVE_INFINITY;
+        double lat = 0.0;
+        double lon = 0.0;
         int limit = Math.min(locations.size(), 300);
         for (int i = 0; i < limit; i++) {
             LocationSample sample = locations.get(i);
-            double baro = altitude(sample, barometer);
-            if (Double.isNaN(baro)) continue;
-            minAlt = Math.min(minAlt, baro);
-            maxAlt = Math.max(maxAlt, baro);
             double speed = Double.isNaN(sample.speedMetersPerSecond()) ? 0.0 : sample.speedMetersPerSecond();
             if (speed <= 1.0) {
-                lat += sample.latitude(); lon += sample.longitude(); alt += baro; count++;
+                lat += sample.latitude();
+                lon += sample.longitude();
+                count++;
             }
         }
-        if (count == 0 || maxAlt - minAlt > 2.0) {
-            LocationSample first = locations.get(0);
-            return new GroundReference(first.latitude(), first.longitude(), altitude(first, barometer));
+        LocationSample first = locations.get(0);
+        double referenceLatitude = count == 0 ? first.latitude() : lat / count;
+        double referenceLongitude = count == 0 ? first.longitude() : lon / count;
+        return new GroundReference(referenceLatitude, referenceLongitude, lowestAltitude(locations, barometer));
+    }
+
+    private double lowestAltitude(List<LocationSample> locations, List<BarometerSample> barometer) {
+        double lowest = Double.POSITIVE_INFINITY;
+        for (LocationSample location : locations) {
+            double altitude = altitude(location, barometer);
+            if (!Double.isNaN(altitude)) lowest = Math.min(lowest, altitude);
         }
-        return new GroundReference(lat / count, lon / count, alt / count);
+        if (!Double.isInfinite(lowest)) return lowest;
+        return altitude(locations.get(0), barometer);
     }
 
     private List<TrackPoint> points(List<LocationSample> locations, List<BarometerSample> barometer, GroundReference ref) {
@@ -194,7 +202,7 @@ public final class SensorLoggerTrackLoader {
     private Map<String, String> metadata(Path file) throws IOException {
         Map<String, String> result = new LinkedHashMap<>();
         try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
-            String header = reader.readLine();
+            reader.readLine();
             String line;
             while ((line = reader.readLine()) != null) {
                 List<String> row = csv(line);
