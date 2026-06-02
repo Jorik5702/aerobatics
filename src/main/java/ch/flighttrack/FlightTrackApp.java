@@ -5,6 +5,7 @@ import ch.flighttrack.render.TrackRenderer;
 import ch.flighttrack.tracks.LoadedTrackData;
 import ch.flighttrack.tracks.SensorFileSummary;
 import ch.flighttrack.tracks.SensorLoggerTrackLoader;
+import ch.flighttrack.tracks.TrackPoint;
 import org.lwjgl.glfw.GLFWErrorCallback;
 import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.GL11;
@@ -106,9 +107,7 @@ public final class FlightTrackApp {
         errorCallback = GLFWErrorCallback.createPrint(System.err);
         glfwSetErrorCallback(errorCallback);
 
-        if (!glfwInit()) {
-            throw new IllegalStateException("Unable to initialise GLFW");
-        }
+        if (!glfwInit()) throw new IllegalStateException("Unable to initialise GLFW");
 
         glfwDefaultWindowHints();
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
@@ -118,9 +117,7 @@ public final class FlightTrackApp {
         glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
         window = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_TITLE, MemoryUtil.NULL, MemoryUtil.NULL);
-        if (window == MemoryUtil.NULL) {
-            throw new IllegalStateException("Unable to create GLFW window");
-        }
+        if (window == MemoryUtil.NULL) throw new IllegalStateException("Unable to create GLFW window");
 
         glfwSetWindowCloseCallback(window, ignored -> glfwSetWindowShouldClose(window, true));
         installInputCallbacks();
@@ -130,9 +127,7 @@ public final class FlightTrackApp {
         GL.createCapabilities();
         trackRenderer.init();
 
-        String glVersion = GL11.glGetString(GL11.GL_VERSION);
-        System.out.println("OpenGL version: " + glVersion);
-
+        System.out.println("OpenGL version: " + GL11.glGetString(GL11.GL_VERSION));
         rescanTracks();
         updateWindowTitle();
         printMenu();
@@ -208,15 +203,12 @@ public final class FlightTrackApp {
         try {
             List<Path> tracks = trackLoader.discoverTracks();
             menuState.setAvailableTracks(tracks);
-            if (tracks.isEmpty()) {
-                menuState.setStatusMessage("No tracks found under ./tracks. Add Sensor Logger exports there and press R.");
-            } else {
-                menuState.setStatusMessage("Found " + tracks.size() + " track directory/directories. Press L to load the default track.");
-            }
+            menuState.setStatusMessage(tracks.isEmpty()
+                    ? "No tracks found under ./tracks. Add Sensor Logger exports there and press R."
+                    : "Found " + tracks.size() + " track directory/directories. Press L to load the default track.");
         } catch (IOException exception) {
             menuState.setStatusMessage("Failed to scan tracks: " + exception.getMessage());
         }
-
         updateWindowTitle();
         printMenu();
     }
@@ -278,7 +270,8 @@ public final class FlightTrackApp {
         System.out.printf("  latitude %.8f%n", trackData.groundReference().latitude());
         System.out.printf("  longitude %.8f%n", trackData.groundReference().longitude());
         System.out.printf("  reference altitude %.2f m (lowest track altitude)%n", trackData.groundReference().barometricAltitudeMeters());
-        System.out.println("Track points: " + trackData.points().size());
+        System.out.println("Track points after stable-start trim: " + trackData.points().size());
+        System.out.printf("Calculated track time: %.2f s%n", calculatedTrackSeconds(trackData));
         System.out.println("Moving points: " + trackData.movingPointCount());
         System.out.println("Sensor files: " + trackData.summary().sensorFiles().size());
         for (SensorFileSummary sensorFile : trackData.summary().sensorFiles()) {
@@ -288,6 +281,17 @@ public final class FlightTrackApp {
             System.out.println("Metadata:");
             trackData.metadata().forEach((key, value) -> System.out.println("  " + key + ": " + value));
         }
+    }
+
+    private double calculatedTrackSeconds(LoadedTrackData trackData) {
+        List<TrackPoint> points = trackData.points();
+        if (points.size() < 2) return 0.0;
+        TrackPoint first = points.get(0);
+        TrackPoint last = points.get(points.size() - 1);
+        if (!Double.isNaN(first.secondsElapsed()) && !Double.isNaN(last.secondsElapsed())) {
+            return Math.max(0.0, last.secondsElapsed() - first.secondsElapsed());
+        }
+        return Math.max(0L, last.timeNanos() - first.timeNanos()) / 1_000_000_000.0;
     }
 
     private void cleanup() {
