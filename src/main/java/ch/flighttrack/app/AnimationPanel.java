@@ -26,7 +26,7 @@ public final class AnimationPanel {
     private final JLabel gpsLabel = new JLabel("GPS: -");
     private final JLabel speedLabel = new JLabel("Speed: -");
     private final JLabel heightLabel = new JLabel("Relative height: -");
-    private final JLabel absoluteHeightLabel = new JLabel("Absolute height MSL: -");
+    private final JLabel absoluteHeightLabel = new JLabel("Barometric height MSL: -");
     private final JLabel absoluteTimeLabel = new JLabel("Absolute time: -");
     private final JLabel relativeTimeLabel = new JLabel("Relative time: -");
     private final JSlider timeSlider = new JSlider(0, SLIDER_MAX, 0);
@@ -172,7 +172,7 @@ public final class AnimationPanel {
                 gpsLabel.setText("GPS: -");
                 speedLabel.setText("Speed: -");
                 heightLabel.setText("Relative height: -");
-                absoluteHeightLabel.setText("Absolute height MSL: -");
+                absoluteHeightLabel.setText("Barometric height MSL: -");
                 absoluteTimeLabel.setText("Absolute time: -");
                 relativeTimeLabel.setText("Relative time: -");
                 return;
@@ -182,18 +182,13 @@ public final class AnimationPanel {
             gpsLabel.setText(String.format("GPS: %.7f, %.7f", point.latitude(), point.longitude()));
             speedLabel.setText(String.format("Speed: %.2f m/s", point.speedMetersPerSecond()));
             heightLabel.setText(String.format("Relative height: %.2f m", point.zMeters()));
-            absoluteHeightLabel.setText(String.format("Absolute height MSL: %.2f m", absoluteHeightMeters(point)));
+            absoluteHeightLabel.setText(String.format("Barometric height MSL: %.2f m", point.barometricAltitudeMeters()));
             absoluteTimeLabel.setText("Absolute time: " + absoluteTime(point));
             relativeTimeLabel.setText(String.format("Relative time: %.2f / %.2f s", seconds, duration));
             internalSliderUpdate = true;
             timeSlider.setValue(duration <= 0.0 ? 0 : (int) Math.round(SLIDER_MAX * seconds / duration));
             internalSliderUpdate = false;
         });
-    }
-
-    private double absoluteHeightMeters(TrackPoint point) {
-        if (!Double.isNaN(point.barometricAltitudeMeters())) return point.barometricAltitudeMeters();
-        return point.gpsAltitudeMeters();
     }
 
     private String absoluteTime(TrackPoint point) {
