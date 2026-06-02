@@ -80,9 +80,7 @@ public final class TrackRenderer {
 
     public void uploadTrack(List<TrackPoint> points) {
         pointCount = points.size();
-        if (points.isEmpty()) {
-            return;
-        }
+        if (points.isEmpty()) return;
 
         Bounds bounds = Bounds.from(points);
         centerX = (bounds.minX + bounds.maxX) * 0.5f;
@@ -98,13 +96,7 @@ public final class TrackRenderer {
             vertices.put((float) (-(point.yMeters() - centerY) * trackScale));
         }
         vertices.flip();
-
-        glBindVertexArray(trackVao);
-        glBindBuffer(GL_ARRAY_BUFFER, trackVbo);
-        glBufferData(GL_ARRAY_BUFFER, vertices, GL_STATIC_DRAW);
-        glVertexAttribPointer(0, 3, GL_FLOAT, false, 3 * Float.BYTES, 0L);
-        glEnableVertexAttribArray(0);
-        glBindVertexArray(0);
+        uploadBuffer(trackVao, trackVbo, vertices);
     }
 
     public void render(int width, int height, float yaw, float pitch, float distance) {
@@ -115,7 +107,8 @@ public final class TrackRenderer {
         float eyeY = (float) (Math.sin(pitch) * distance);
         float eyeZ = (float) (Math.cos(yaw) * cosPitch * distance);
         Mat4f view = Mat4f.lookAt(eyeX, eyeY, eyeZ, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f);
-        float[] mvp = projection.multiply(view).values();
+        FloatBuffer mvp = BufferUtils.createFloatBuffer(16);
+        mvp.put(projection.multiply(view).values()).flip();
 
         glUseProgram(program);
         glUniformMatrix4fv(mvpUniform, false, mvp);
@@ -142,27 +135,13 @@ public final class TrackRenderer {
     }
 
     public void cleanup() {
-        if (trackVbo != 0) {
-            glDeleteBuffers(trackVbo);
-        }
-        if (axesVbo != 0) {
-            glDeleteBuffers(axesVbo);
-        }
-        if (originVbo != 0) {
-            glDeleteBuffers(originVbo);
-        }
-        if (trackVao != 0) {
-            glDeleteVertexArrays(trackVao);
-        }
-        if (axesVao != 0) {
-            glDeleteVertexArrays(axesVao);
-        }
-        if (originVao != 0) {
-            glDeleteVertexArrays(originVao);
-        }
-        if (program != 0) {
-            glDeleteProgram(program);
-        }
+        if (trackVbo != 0) glDeleteBuffers(trackVbo);
+        if (axesVbo != 0) glDeleteBuffers(axesVbo);
+        if (originVbo != 0) glDeleteBuffers(originVbo);
+        if (trackVao != 0) glDeleteVertexArrays(trackVao);
+        if (axesVao != 0) glDeleteVertexArrays(axesVao);
+        if (originVao != 0) glDeleteVertexArrays(originVao);
+        if (program != 0) glDeleteProgram(program);
     }
 
     private void uploadAxes() {
@@ -173,19 +152,18 @@ public final class TrackRenderer {
         };
         FloatBuffer vertices = BufferUtils.createFloatBuffer(axes.length);
         vertices.put(axes).flip();
-        glBindVertexArray(axesVao);
-        glBindBuffer(GL_ARRAY_BUFFER, axesVbo);
-        glBufferData(GL_ARRAY_BUFFER, vertices, GL_STATIC_DRAW);
-        glVertexAttribPointer(0, 3, GL_FLOAT, false, 3 * Float.BYTES, 0L);
-        glEnableVertexAttribArray(0);
-        glBindVertexArray(0);
+        uploadBuffer(axesVao, axesVbo, vertices);
     }
 
     private void uploadOrigin() {
         FloatBuffer vertices = BufferUtils.createFloatBuffer(3);
         vertices.put(0.0f).put(0.0f).put(0.0f).flip();
-        glBindVertexArray(originVao);
-        glBindBuffer(GL_ARRAY_BUFFER, originVbo);
+        uploadBuffer(originVao, originVbo, vertices);
+    }
+
+    private void uploadBuffer(int vao, int vbo, FloatBuffer vertices) {
+        glBindVertexArray(vao);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
         glBufferData(GL_ARRAY_BUFFER, vertices, GL_STATIC_DRAW);
         glVertexAttribPointer(0, 3, GL_FLOAT, false, 3 * Float.BYTES, 0L);
         glEnableVertexAttribArray(0);
@@ -209,7 +187,6 @@ public final class TrackRenderer {
                     fragColor = vec4(uColor, 1.0);
                 }
                 """);
-
         int createdProgram = glCreateProgram();
         glAttachShader(createdProgram, vertexShader);
         glAttachShader(createdProgram, fragmentShader);
@@ -234,12 +211,9 @@ public final class TrackRenderer {
 
     private record Bounds(float minX, float maxX, float minY, float maxY, float minZ, float maxZ) {
         static Bounds from(List<TrackPoint> points) {
-            float minX = Float.POSITIVE_INFINITY;
-            float maxX = Float.NEGATIVE_INFINITY;
-            float minY = Float.POSITIVE_INFINITY;
-            float maxY = Float.NEGATIVE_INFINITY;
-            float minZ = Float.POSITIVE_INFINITY;
-            float maxZ = Float.NEGATIVE_INFINITY;
+            float minX = Float.POSITIVE_INFINITY, maxX = Float.NEGATIVE_INFINITY;
+            float minY = Float.POSITIVE_INFINITY, maxY = Float.NEGATIVE_INFINITY;
+            float minZ = Float.POSITIVE_INFINITY, maxZ = Float.NEGATIVE_INFINITY;
             for (TrackPoint point : points) {
                 minX = Math.min(minX, (float) point.xMeters());
                 maxX = Math.max(maxX, (float) point.xMeters());
