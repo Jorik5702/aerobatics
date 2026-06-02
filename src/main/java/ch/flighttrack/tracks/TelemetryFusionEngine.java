@@ -104,8 +104,12 @@ final class TelemetryFusionEngine {
         }
         int n = end - start;
         double gx = sx / n, gy = sy / n, gz = sz / n;
-        String side = gz >= 0.0 ? "screen likely up" : "screen likely down";
-        return new Mount(String.format(Locale.ROOT, "avg gravity x=%.3f y=%.3f z=%.3f, %s", gx, gy, gz, side));
+        double magnitude = Math.sqrt(gx * gx + gy * gy + gz * gz);
+        double flatTiltDegrees = magnitude == 0.0 ? Double.NaN : Math.toDegrees(Math.acos(Math.min(1.0, Math.abs(gz) / magnitude)));
+        String side = gz < 0.0 ? "screen likely up" : "screen likely down";
+        return new Mount(String.format(Locale.ROOT,
+                "avg gravity x=%.3f y=%.3f z=%.3f, |g|=%.3f, flat tilt=%.1f deg, %s",
+                gx, gy, gz, magnitude, flatTiltDegrees, side));
     }
 
     private OrientationDiagnostic diagnoseOrientation(List<RawOrientation> samples, long startTime) {
