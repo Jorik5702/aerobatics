@@ -2,7 +2,7 @@
 # ----------------------------------------------------------------------------
 # Self-contained Maven startup script for this project.
 # Downloads Apache Maven if it is not already available in .mvn/wrapper/dists.
-# On macOS, starts the JVM with -XstartOnFirstThread so LWJGL/GLFW can create windows.
+# On macOS, maps './mvnw exec:java' to a forked Java process with -XstartOnFirstThread.
 # ----------------------------------------------------------------------------
 
 set -e
@@ -14,6 +14,7 @@ MAVEN_VERSION="3.9.11"
 MAVEN_DIR="$WRAPPER_DIR/dists/apache-maven-$MAVEN_VERSION"
 MAVEN_BIN="$MAVEN_DIR/bin/mvn"
 MAVEN_ZIP="$WRAPPER_DIR/dists/apache-maven-$MAVEN_VERSION-bin.zip"
+MAIN_CLASS="ch.flighttrack.FlightTrackApp"
 
 read_property() {
   sed -n "s/^$1=//p" "$WRAPPER_PROPERTIES" | tail -n 1
@@ -43,8 +44,11 @@ if [ ! -x "$MAVEN_BIN" ]; then
   chmod +x "$MAVEN_BIN"
 fi
 
-if [ "$(uname -s)" = "Darwin" ]; then
-  export MAVEN_OPTS="-XstartOnFirstThread ${MAVEN_OPTS:-}"
+if [ "$(uname -s)" = "Darwin" ] && [ "$1" = "exec:java" ]; then
+  shift
+  "$MAVEN_BIN" -q -f "$BASE_DIR/pom.xml" compile dependency:build-classpath -Dmdep.outputFile="$BASE_DIR/target/classpath.txt"
+  CLASSPATH="$BASE_DIR/target/classes:$(cat "$BASE_DIR/target/classpath.txt")"
+  exec java -XstartOnFirstThread -cp "$CLASSPATH" "$MAIN_CLASS" "$@"
 fi
 
 exec "$MAVEN_BIN" -f "$BASE_DIR/pom.xml" "$@"
