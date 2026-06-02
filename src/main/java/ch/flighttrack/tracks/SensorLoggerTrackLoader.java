@@ -6,7 +6,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -18,10 +17,6 @@ import java.util.stream.Stream;
 public final class SensorLoggerTrackLoader {
     private static final Path TRACKS = Path.of("tracks");
     private static final String DEFAULT_TRACK = "2025-10-18_12-30-13";
-    private static final double EARTH_RADIUS_METERS = 6_378_137.0;
-    private static final int STABLE_WINDOW_SAMPLES = 40;
-    private static final double STABLE_ALTITUDE_RANGE_METERS = 0.8;
-    private static final double STABLE_MAX_SPEED_METERS_PER_SECOND = 0.7;
 
     public List<Path> discoverTracks() throws IOException {
         if (!Files.isDirectory(TRACKS)) return List.of();
@@ -44,51 +39,7 @@ public final class SensorLoggerTrackLoader {
 
     public LoadedTrackData loadDetailedTrack(Path trackDirectory) throws IOException {
         TrackFiles files = scan(trackDirectory);
-        Path locationFile = files.csv("Location.csv")
-                .orElseThrow(() -> new IOException("Location.csv not found in " + trackDirectory.toAbsolutePath()));
-        List<LocationSample> allLocations = readLocations(locationFile);
-        if (allLocations.isEmpty()) throw new IOException("Location.csv contains no usable location samples");
-
-        Path barometerFile = files.csv("Barometer.csv")
-                .orElseThrow(() -> new IOException("Barometer.csv is required because altitude is always taken from barometric data"));
-        List<BarometerSample> barometer = readBarometer(barometerFile);
-        if (barometer.isEmpty()) throw new IOException("Barometer.csv contains no usable altitude samples");
-
-        int stableStart = stableStartIndex(allLocations, barometer);
-        long startTimeNanos = allLocations.get(stableStart).timeNanos();
-        GroundReference reference = reference(allLocations, barometer, startTimeNanos);
-        List<TrackPoint> points = points(allLocations, barometer, reference, startTimeNanos);
-        if (points.isEmpty()) throw new IOException("No usable merged telemetry points found");
-        return new LoadedTrackData(files.summary(), reference, points, files.summary().metadata());
-    }
-
-    private int stableStartIndex(List<LocationSample> locations, List<BarometerSample> barometer) {
-        if (locations.size() <= STABLE_WINDOW_SAMPLES) return 0;
-        int maxStart = locations.size() - STABLE_WINDOW_SAMPLES;
-        for (int start = 0; start <= maxStart; start++) {
-            double minAltitude = Double.POSITIVE_INFINITY;
-            double maxAltitude = Double.NEGATIVE_INFINITY;
-            double maxSpeed = 0.0;
-            int usableAltitudeSamples = 0;
-            for (int i = start; i < start + STABLE_WINDOW_SAMPLES; i++) {
-                LocationSample sample = locations.get(i);
-                double altitude = altitude(sample.timeNanos(), barometer);
-                if (!Double.isNaN(altitude)) {
-                    minAltitude = Math.min(minAltitude, altitude);
-                    maxAltitude = Math.max(maxAltitude, altitude);
-                    usableAltitudeSamples++;
-                }
-                double speed = Double.isNaN(sample.speedMetersPerSecond()) ? 0.0 : sample.speedMetersPerSecond();
-                maxSpeed = Math.max(maxSpeed, speed);
-            }
-            double altitudeRange = maxAltitude - minAltitude;
-            if (usableAltitudeSamples > STABLE_WINDOW_SAMPLES / 2
-                    && altitudeRange <= STABLE_ALTITUDE_RANGE_METERS
-                    && maxSpeed <= STABLE_MAX_SPEED_METERS_PER_SECOND) {
-                return start;
-            }
-        }
-        return 0;
+        return new TelemetryFusionEngine().load(files.summary());
     }
 
     private TrackFiles scan(Path dir) throws IOException {
@@ -107,133 +58,11 @@ public final class SensorLoggerTrackLoader {
                 if ("metadata.csv".equalsIgnoreCase(name)) metadata = metadata(file);
             }
         }
-        return new TrackFiles(new TrackSummary(dir, summaries, location, metadata), csv);
+        return new TrackFiles(new TrackSummary(dir, List.copyOf(summaries), location, metadata), Map.copyOf(csv));
     }
 
     private boolean isCsv(Path path) {
         return path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".csv");
-    }
-
-    private List<LocationSample> readLocations(Path file) throws IOException {
-        List<LocationSample> result = new ArrayList<>();
-        try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
-            String header = reader.readLine();
-            if (header == null) return result;
-            Map<String, Integer> h = index(csv(header));
-            Integer time = first(h, "time", "timestamp");
-            Integer seconds = first(h, "seconds_elapsed", "seconds", "elapsed");
-            Integer lat = first(h, "latitude", "lat");
-            Integer lon = first(h, "longitude", "lng", "lon");
-            Integer alt = first(h, "altitude", "altitude_wgs84", "altitude_above_mean_sea_level");
-            Integer speed = first(h, "speed", "speed_meters_per_second", "horizontal_speed");
-            if (lat == null || lon == null) return result;
-            String line;
-            while ((line = reader.readLine()) != null) {
-                List<String> row = csv(line);
-                Optional<Double> latitude = dbl(row, lat);
-                Optional<Double> longitude = dbl(row, lon);
-                if (latitude.isEmpty() || longitude.isEmpty()) continue;
-                result.add(new LocationSample(
-                        time == null ? result.size() : lng(row, time).orElse((long) result.size()),
-                        seconds == null ? Double.NaN : dbl(row, seconds).orElse(Double.NaN),
-                        latitude.get(), longitude.get(),
-                        alt == null ? Double.NaN : dbl(row, alt).orElse(Double.NaN),
-                        speed == null ? Double.NaN : dbl(row, speed).orElse(Double.NaN)));
-            }
-        }
-        result.sort(Comparator.comparingLong(LocationSample::timeNanos));
-        return result;
-    }
-
-    private List<BarometerSample> readBarometer(Path file) throws IOException {
-        List<BarometerSample> result = new ArrayList<>();
-        try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
-            String header = reader.readLine();
-            if (header == null) return result;
-            Map<String, Integer> h = index(csv(header));
-            Integer time = first(h, "time", "timestamp");
-            Integer altitude = first(h, "relativeAltitude", "relative_altitude", "altitude", "barometric_altitude", "altitude_meters");
-            if (altitude == null) return result;
-            String line;
-            while ((line = reader.readLine()) != null) {
-                List<String> row = csv(line);
-                Optional<Double> value = dbl(row, altitude);
-                if (value.isEmpty()) continue;
-                result.add(new BarometerSample(time == null ? result.size() : lng(row, time).orElse((long) result.size()), value.get()));
-            }
-        }
-        result.sort(Comparator.comparingLong(BarometerSample::timeNanos));
-        return result;
-    }
-
-    private GroundReference reference(List<LocationSample> locations, List<BarometerSample> barometer, long startTimeNanos) throws IOException {
-        MergedCursor cursor = new MergedCursor(locations, barometer, startTimeNanos);
-        MergedSample sample;
-        MergedSample lowest = null;
-        while ((sample = cursor.next()) != null) {
-            if (lowest == null || sample.barometricAltitudeMeters() < lowest.barometricAltitudeMeters()) {
-                lowest = sample;
-            }
-        }
-        if (lowest == null) throw new IOException("No merged telemetry sample with location and barometric altitude found");
-        return new GroundReference(lowest.latitude(), lowest.longitude(), lowest.barometricAltitudeMeters());
-    }
-
-    private List<TrackPoint> points(List<LocationSample> locations, List<BarometerSample> barometer,
-                                    GroundReference ref, long startTimeNanos) {
-        List<TrackPoint> result = new ArrayList<>();
-        MergedCursor cursor = new MergedCursor(locations, barometer, startTimeNanos);
-        MergedSample sample;
-        long firstOutputTime = -1L;
-        while ((sample = cursor.next()) != null) {
-            if (firstOutputTime < 0L) firstOutputTime = sample.timeNanos();
-            double x = Math.toRadians(sample.longitude() - ref.longitude()) * EARTH_RADIUS_METERS * Math.cos(Math.toRadians(ref.latitude()));
-            double y = Math.toRadians(sample.latitude() - ref.latitude()) * EARTH_RADIUS_METERS;
-            double z = sample.barometricAltitudeMeters() - ref.barometricAltitudeMeters();
-            double secondsElapsed = (sample.timeNanos() - firstOutputTime) / 1_000_000_000.0;
-            boolean moving = Math.abs(z) > 1.0 || Math.hypot(x, y) > 5.0
-                    || (!Double.isNaN(sample.speedMetersPerSecond()) && sample.speedMetersPerSecond() > 1.5);
-            result.add(new TrackPoint(sample.timeNanos(), secondsElapsed, sample.latitude(), sample.longitude(),
-                    sample.gpsAltitudeMeters(), sample.barometricAltitudeMeters(), sample.speedMetersPerSecond(), x, y, z, moving));
-        }
-        return List.copyOf(result);
-    }
-
-    private double altitude(long timeNanos, List<BarometerSample> barometer) {
-        BarometerSample nearest = nearest(timeNanos, barometer);
-        return nearest == null ? Double.NaN : nearest.altitudeMeters();
-    }
-
-    private BarometerSample nearest(long time, List<BarometerSample> samples) {
-        if (samples.isEmpty()) return null;
-        int insertionPoint = firstBarometerIndexAtOrAfter(samples, time);
-        if (insertionPoint <= 0) return samples.get(0);
-        if (insertionPoint >= samples.size()) return samples.get(samples.size() - 1);
-        BarometerSample before = samples.get(insertionPoint - 1);
-        BarometerSample after = samples.get(insertionPoint);
-        return Math.abs(before.timeNanos() - time) <= Math.abs(after.timeNanos() - time) ? before : after;
-    }
-
-    private int firstLocationIndexAtOrAfter(List<LocationSample> samples, long timeNanos) {
-        int low = 0;
-        int high = samples.size();
-        while (low < high) {
-            int mid = (low + high) >>> 1;
-            if (samples.get(mid).timeNanos() < timeNanos) low = mid + 1;
-            else high = mid;
-        }
-        return low;
-    }
-
-    private int firstBarometerIndexAtOrAfter(List<BarometerSample> samples, long timeNanos) {
-        int low = 0;
-        int high = samples.size();
-        while (low < high) {
-            int mid = (low + high) >>> 1;
-            if (samples.get(mid).timeNanos() < timeNanos) low = mid + 1;
-            else high = mid;
-        }
-        return low;
     }
 
     private CsvHead head(Path file) throws IOException {
@@ -274,19 +103,28 @@ public final class SensorLoggerTrackLoader {
             String line;
             while ((line = reader.readLine()) != null) {
                 List<String> row = csv(line);
-                Optional<Double> la = dbl(row, lat), lo = dbl(row, lon);
+                Optional<Double> la = dbl(row, lat);
+                Optional<Double> lo = dbl(row, lon);
                 if (la.isEmpty() || lo.isEmpty()) continue;
                 n++;
-                minLat = Math.min(minLat, la.get()); maxLat = Math.max(maxLat, la.get());
-                minLon = Math.min(minLon, lo.get()); maxLon = Math.max(maxLon, lo.get());
+                minLat = Math.min(minLat, la.get());
+                maxLat = Math.max(maxLat, la.get());
+                minLon = Math.min(minLon, lo.get());
+                maxLon = Math.max(maxLon, lo.get());
                 if (alt != null) {
                     Optional<Double> a = dbl(row, alt);
-                    if (a.isPresent()) { minAlt = Math.min(minAlt, a.get()); maxAlt = Math.max(maxAlt, a.get()); }
+                    if (a.isPresent()) {
+                        minAlt = Math.min(minAlt, a.get());
+                        maxAlt = Math.max(maxAlt, a.get());
+                    }
                 }
             }
         }
         if (n == 0) return Optional.empty();
-        if (Double.isInfinite(minAlt)) { minAlt = Double.NaN; maxAlt = Double.NaN; }
+        if (Double.isInfinite(minAlt)) {
+            minAlt = Double.NaN;
+            maxAlt = Double.NaN;
+        }
         return Optional.of(new LocationSummary(n, minLat, maxLat, minLon, maxLon, minAlt, maxAlt));
     }
 
@@ -316,12 +154,11 @@ public final class SensorLoggerTrackLoader {
 
     private Optional<Double> dbl(List<String> row, int index) {
         if (index < 0 || index >= row.size() || row.get(index).isBlank()) return Optional.empty();
-        try { return Optional.of(Double.parseDouble(row.get(index).trim())); } catch (NumberFormatException e) { return Optional.empty(); }
-    }
-
-    private Optional<Long> lng(List<String> row, int index) {
-        if (index < 0 || index >= row.size() || row.get(index).isBlank()) return Optional.empty();
-        try { return Optional.of(Long.parseLong(row.get(index).trim())); } catch (NumberFormatException e) { return Optional.empty(); }
+        try {
+            return Optional.of(Double.parseDouble(row.get(index).trim()));
+        } catch (NumberFormatException exception) {
+            return Optional.empty();
+        }
     }
 
     private List<String> csv(String line) {
@@ -331,57 +168,17 @@ public final class SensorLoggerTrackLoader {
         for (int i = 0; i < line.length(); i++) {
             char c = line.charAt(i);
             if (c == '"') quoted = !quoted;
-            else if (c == ',' && !quoted) { result.add(current.toString()); current.setLength(0); }
-            else current.append(c);
+            else if (c == ',' && !quoted) {
+                result.add(current.toString());
+                current.setLength(0);
+            } else {
+                current.append(c);
+            }
         }
         result.add(current.toString());
         return result;
     }
 
-    private final class MergedCursor {
-        private final List<LocationSample> locations;
-        private final List<BarometerSample> barometer;
-        private int locationIndex;
-        private int barometerIndex;
-        private LocationSample lastLocation;
-        private BarometerSample lastBarometer;
-
-        private MergedCursor(List<LocationSample> locations, List<BarometerSample> barometer, long startTimeNanos) {
-            this.locations = locations;
-            this.barometer = barometer;
-            this.locationIndex = firstLocationIndexAtOrAfter(locations, startTimeNanos);
-            this.barometerIndex = firstBarometerIndexAtOrAfter(barometer, startTimeNanos);
-            if (locationIndex > 0) this.lastLocation = locations.get(locationIndex - 1);
-            if (barometerIndex > 0) this.lastBarometer = barometer.get(barometerIndex - 1);
-        }
-
-        private MergedSample next() {
-            while (locationIndex < locations.size() || barometerIndex < barometer.size()) {
-                long nextLocationTime = locationIndex < locations.size() ? locations.get(locationIndex).timeNanos() : Long.MAX_VALUE;
-                long nextBarometerTime = barometerIndex < barometer.size() ? barometer.get(barometerIndex).timeNanos() : Long.MAX_VALUE;
-                long nextTime = Math.min(nextLocationTime, nextBarometerTime);
-
-                while (locationIndex < locations.size() && locations.get(locationIndex).timeNanos() == nextTime) {
-                    lastLocation = locations.get(locationIndex++);
-                }
-                while (barometerIndex < barometer.size() && barometer.get(barometerIndex).timeNanos() == nextTime) {
-                    lastBarometer = barometer.get(barometerIndex++);
-                }
-
-                if (lastLocation != null && lastBarometer != null) {
-                    return new MergedSample(nextTime, lastLocation.latitude(), lastLocation.longitude(),
-                            lastLocation.gpsAltitudeMeters(), lastBarometer.altitudeMeters(), lastLocation.speedMetersPerSecond());
-                }
-            }
-            return null;
-        }
-    }
-
     private record CsvHead(List<String> headers, int rows) {}
-    private record TrackFiles(TrackSummary summary, Map<String, Path> files) {
-        Optional<Path> csv(String name) { return Optional.ofNullable(files.get(name.toLowerCase(Locale.ROOT))); }
-    }
-    private record LocationSample(long timeNanos, double secondsElapsed, double latitude, double longitude, double gpsAltitudeMeters, double speedMetersPerSecond) {}
-    private record BarometerSample(long timeNanos, double altitudeMeters) {}
-    private record MergedSample(long timeNanos, double latitude, double longitude, double gpsAltitudeMeters, double barometricAltitudeMeters, double speedMetersPerSecond) {}
+    private record TrackFiles(TrackSummary summary, Map<String, Path> files) {}
 }
