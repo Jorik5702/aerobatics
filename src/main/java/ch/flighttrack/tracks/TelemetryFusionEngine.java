@@ -37,7 +37,7 @@ final class TelemetryFusionEngine {
         System.out.printf("Telemetry fusion: locations=%d, barometer=%d, accelerometer=%d, accelUncalibrated=%d, gravity=%d, magnetometer=%d, magnetometerUncalibrated=%d, orientation=%d, fusedPoints=%d%n",
                 locations.size(), barometer.size(), accelerometer.size(), accelerometerUncalibrated.size(), gravity.size(), magnetometer.size(), magnetometerUncalibrated.size(), orientation.size(), points.size());
         System.out.println("Telemetry fusion mode: conservative multi-rate timeline; GPS is horizontal truth, barometer is vertical truth.");
-        System.out.println("Plane symbol heading and pitch use the selected orientation mount when quaternion data is available.");
+        System.out.println("Plane symbol heading, pitch and roll use the selected orientation mount when quaternion data is available.");
         System.out.printf("Phone mount diagnostic: %s%n", mount.description());
         System.out.printf("Orientation diagnostic: %s%n", orientationDiagnostic.description());
         System.out.printf("Attitude/GPS course diagnostic: %s%n", attitudeDiagnostic);
@@ -77,10 +77,11 @@ final class TelemetryFusionEngine {
             double seconds = (sample.timeNanos() - firstTime) / 1_000_000_000.0;
             double heading = OrientationMath.selectedForwardHeading(sample.orientation());
             double pitch = OrientationMath.selectedForwardPitch(sample.orientation());
+            double roll = OrientationMath.selectedRoll(sample.orientation());
             boolean moving = Math.abs(z) > 1.0 || Math.hypot(x, y) > 5.0
                     || (!Double.isNaN(location.speedMetersPerSecond()) && location.speedMetersPerSecond() > 1.5);
             result.add(new TrackPoint(sample.timeNanos(), seconds, location.latitude(), location.longitude(),
-                    location.gpsAltitudeMeters(), sample.baroAltitude(), location.speedMetersPerSecond(), x, y, z, moving, heading, pitch));
+                    location.gpsAltitudeMeters(), sample.baroAltitude(), location.speedMetersPerSecond(), x, y, z, moving, heading, pitch, roll));
         }
         return List.copyOf(result);
     }
