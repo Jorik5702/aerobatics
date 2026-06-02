@@ -19,6 +19,9 @@ public final class SensorLoggerTrackLoader {
     private static final Path TRACKS = Path.of("tracks");
     private static final String DEFAULT_TRACK = "2025-10-18_12-30-13";
     private static final double EARTH_RADIUS_METERS = 6_378_137.0;
+    private static final int STABLE_WINDOW_SAMPLES = 40;
+    private static final double STABLE_ALTITUDE_RANGE_METERS = 0.8;
+    private static final double STABLE_MAX_SPEED_METERS_PER_SECOND = 0.7;
 
     public List<Path> discoverTracks() throws IOException {
         if (!Files.isDirectory(TRACKS)) return List.of();
@@ -43,16 +46,47 @@ public final class SensorLoggerTrackLoader {
         TrackFiles files = scan(trackDirectory);
         Path locationFile = files.csv("Location.csv")
                 .orElseThrow(() -> new IOException("Location.csv not found in " + trackDirectory.toAbsolutePath()));
-        List<LocationSample> locations = readLocations(locationFile);
-        if (locations.isEmpty()) throw new IOException("Location.csv contains no usable location samples");
+        List<LocationSample> allLocations = readLocations(locationFile);
+        if (allLocations.isEmpty()) throw new IOException("Location.csv contains no usable location samples");
 
         List<BarometerSample> barometer = List.of();
         Optional<Path> barometerFile = files.csv("Barometer.csv");
         if (barometerFile.isPresent()) barometer = readBarometer(barometerFile.get());
 
+        int stableStart = stableStartIndex(allLocations, barometer);
+        List<LocationSample> locations = List.copyOf(allLocations.subList(stableStart, allLocations.size()));
         GroundReference reference = reference(locations, barometer);
         List<TrackPoint> points = points(locations, barometer, reference);
         return new LoadedTrackData(files.summary(), reference, points, files.summary().metadata());
+    }
+
+    private int stableStartIndex(List<LocationSample> locations, List<BarometerSample> barometer) {
+        if (locations.size() <= STABLE_WINDOW_SAMPLES) return 0;
+        int maxStart = locations.size() - STABLE_WINDOW_SAMPLES;
+        for (int start = 0; start <= maxStart; start++) {
+            double minAltitude = Double.POSITIVE_INFINITY;
+            double maxAltitude = Double.NEGATIVE_INFINITY;
+            double maxSpeed = 0.0;
+            int usableAltitudeSamples = 0;
+            for (int i = start; i < start + STABLE_WINDOW_SAMPLES; i++) {
+                LocationSample sample = locations.get(i);
+                double altitude = altitude(sample, barometer);
+                if (!Double.isNaN(altitude)) {
+                    minAltitude = Math.min(minAltitude, altitude);
+                    maxAltitude = Math.max(maxAltitude, altitude);
+                    usableAltitudeSamples++;
+                }
+                double speed = Double.isNaN(sample.speedMetersPerSecond()) ? 0.0 : sample.speedMetersPerSecond();
+                maxSpeed = Math.max(maxSpeed, speed);
+            }
+            double altitudeRange = maxAltitude - minAltitude;
+            if (usableAltitudeSamples > STABLE_WINDOW_SAMPLES / 2
+                    && altitudeRange <= STABLE_ALTITUDE_RANGE_METERS
+                    && maxSpeed <= STABLE_MAX_SPEED_METERS_PER_SECOND) {
+                return start;
+            }
+        }
+        return 0;
     }
 
     private TrackFiles scan(Path dir) throws IOException {
