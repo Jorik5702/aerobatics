@@ -2,6 +2,7 @@
 # ----------------------------------------------------------------------------
 # Self-contained Maven startup script for this project.
 # Downloads Apache Maven if it is not already available in .mvn/wrapper/dists.
+# On macOS, starts the JVM with -XstartOnFirstThread so LWJGL/GLFW can create windows.
 # ----------------------------------------------------------------------------
 
 set -e
@@ -40,6 +41,10 @@ if [ ! -x "$MAVEN_BIN" ]; then
   rm -rf "$MAVEN_DIR"
   unzip -q "$MAVEN_ZIP" -d "$WRAPPER_DIR/dists"
   chmod +x "$MAVEN_BIN"
+fi
+
+if [ "$(uname -s)" = "Darwin" ]; then
+  export MAVEN_OPTS="-XstartOnFirstThread ${MAVEN_OPTS:-}"
 fi
 
 exec "$MAVEN_BIN" -f "$BASE_DIR/pom.xml" "$@"
