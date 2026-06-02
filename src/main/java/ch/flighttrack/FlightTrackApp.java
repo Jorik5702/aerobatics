@@ -1,5 +1,6 @@
 package ch.flighttrack;
 
+import ch.flighttrack.app.AnimationPanel;
 import ch.flighttrack.app.TrackMenuState;
 import ch.flighttrack.render.TrackRenderer;
 import ch.flighttrack.tracks.LoadedTrackData;
@@ -45,6 +46,7 @@ import static org.lwjgl.glfw.GLFW.glfwCreateWindow;
 import static org.lwjgl.glfw.GLFW.glfwDefaultWindowHints;
 import static org.lwjgl.glfw.GLFW.glfwDestroyWindow;
 import static org.lwjgl.glfw.GLFW.glfwGetFramebufferSize;
+import static org.lwjgl.glfw.GLFW.glfwGetTime;
 import static org.lwjgl.glfw.GLFW.glfwInit;
 import static org.lwjgl.glfw.GLFW.glfwMakeContextCurrent;
 import static org.lwjgl.glfw.GLFW.glfwPollEvents;
@@ -75,6 +77,7 @@ public final class FlightTrackApp {
     private final SensorLoggerTrackLoader trackLoader = new SensorLoggerTrackLoader();
     private final TrackMenuState menuState = new TrackMenuState();
     private final TrackRenderer trackRenderer = new TrackRenderer();
+    private final AnimationPanel animationPanel = new AnimationPanel();
 
     private Optional<LoadedTrackData> loadedTrack = Optional.empty();
     private float cameraYaw = (float) Math.toRadians(45.0);
@@ -86,6 +89,7 @@ public final class FlightTrackApp {
     private boolean panning;
     private double lastMouseX;
     private double lastMouseY;
+    private double lastFrameTime;
 
     private long window;
     private GLFWErrorCallback errorCallback;
@@ -126,11 +130,13 @@ public final class FlightTrackApp {
         glfwSwapInterval(1);
         GL.createCapabilities();
         trackRenderer.init();
+        animationPanel.show();
 
         System.out.println("OpenGL version: " + GL11.glGetString(GL11.GL_VERSION));
         rescanTracks();
         updateWindowTitle();
         printMenu();
+        lastFrameTime = glfwGetTime();
     }
 
     private void installInputCallbacks() {
@@ -190,10 +196,18 @@ public final class FlightTrackApp {
         int[] height = new int[1];
 
         while (!glfwWindowShouldClose(window)) {
+            double now = glfwGetTime();
+            double deltaSeconds = now - lastFrameTime;
+            lastFrameTime = now;
+            animationPanel.update(deltaSeconds);
+
+            int currentIndex = animationPanel.currentIndex();
+            loadedTrack.ifPresent(track -> trackRenderer.uploadPlaneForIndex(track.points(), currentIndex));
+
             glfwGetFramebufferSize(window, width, height);
             glViewport(0, 0, width[0], height[0]);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-            trackRenderer.render(width[0], height[0], cameraYaw, cameraPitch, cameraDistance, panX, panY);
+            trackRenderer.render(width[0], height[0], cameraYaw, cameraPitch, cameraDistance, panX, panY, currentIndex);
             glfwSwapBuffers(window);
             glfwPollEvents();
         }
@@ -221,6 +235,7 @@ public final class FlightTrackApp {
             loadedTrack = Optional.of(detailedTrack);
             menuState.setLoadedTrack(detailedTrack.summary());
             trackRenderer.uploadTrack(detailedTrack.points());
+            animationPanel.setTrack(detailedTrack);
             fitCameraToTrack();
             updateWindowTitle();
             printTrackDetails(detailedTrack);
@@ -295,6 +310,7 @@ public final class FlightTrackApp {
     }
 
     private void cleanup() {
+        animationPanel.close();
         trackRenderer.cleanup();
         if (window != MemoryUtil.NULL) {
             glfwFreeCallbacks(window);
