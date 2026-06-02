@@ -16,6 +16,7 @@ import java.util.stream.Stream;
 
 public final class SensorLoggerTrackLoader {
     private static final Path DEFAULT_TRACKS_DIRECTORY = Path.of("tracks");
+    private static final String PREFERRED_TRACK_DIRECTORY = "2025-10-18_12-30-13";
 
     public List<Path> discoverTracks() throws IOException {
         return discoverTracks(DEFAULT_TRACKS_DIRECTORY);
@@ -35,10 +36,12 @@ public final class SensorLoggerTrackLoader {
     }
 
     public Optional<Path> defaultTrackDirectory() throws IOException {
-        return discoverTracks().stream()
-                .filter(path -> "2025-10-18_12-30-13".equals(path.getFileName().toString()))
-                .findFirst()
-                .or(() -> discoverTracks().stream().findFirst());
+        List<Path> tracks = discoverTracks();
+        Optional<Path> preferredTrack = tracks.stream()
+                .filter(path -> PREFERRED_TRACK_DIRECTORY.equals(path.getFileName().toString()))
+                .findFirst();
+
+        return preferredTrack.or(() -> tracks.stream().findFirst());
     }
 
     public TrackSummary load(Path trackDirectory) throws IOException {
@@ -147,10 +150,6 @@ public final class SensorLoggerTrackLoader {
                 maxLongitude = Math.max(maxLongitude, longitude.get());
 
                 if (altitudeColumn != null) {
-                    readDouble(values, altitudeColumn).ifPresent(altitude -> {
-                        // Updated outside lambda below through mutable holder would be noisier;
-                        // altitude is handled in a direct branch after parsing.
-                    });
                     Optional<Double> altitude = readDouble(values, altitudeColumn);
                     if (altitude.isPresent()) {
                         minAltitude = Math.min(minAltitude, altitude.get());
