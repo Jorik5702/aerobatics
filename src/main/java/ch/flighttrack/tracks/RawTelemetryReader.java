@@ -74,9 +74,9 @@ final class RawTelemetryReader {
             if (header == null) return result;
             Map<String, Integer> h = index(csv(header));
             Integer time = first(h, "time", "timestamp");
-            Integer x = first(h, "x", "accelerationX", "gravityX", "magneticFieldX");
-            Integer y = first(h, "y", "accelerationY", "gravityY", "magneticFieldY");
-            Integer z = first(h, "z", "accelerationZ", "gravityZ", "magneticFieldZ");
+            Integer x = first(h, "x", "accelerationX", "gravityX", "magneticFieldX", "x_uncalib", "xUncalibrated");
+            Integer y = first(h, "y", "accelerationY", "gravityY", "magneticFieldY", "y_uncalib", "yUncalibrated");
+            Integer z = first(h, "z", "accelerationZ", "gravityZ", "magneticFieldZ", "z_uncalib", "zUncalibrated");
             if (x == null || y == null || z == null) return result;
             String line;
             while ((line = reader.readLine()) != null) {
@@ -89,6 +89,49 @@ final class RawTelemetryReader {
             }
         }
         result.sort(Comparator.comparingLong(RawVector::timeNanos));
+        return result;
+    }
+
+    List<RawOrientation> orientation(Path file) throws IOException {
+        if (!Files.isRegularFile(file)) return List.of();
+        List<RawOrientation> result = new ArrayList<>();
+        try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+            String header = reader.readLine();
+            if (header == null) return result;
+            Map<String, Integer> h = index(csv(header));
+            Integer time = first(h, "time", "timestamp");
+            Integer qx = first(h, "qx", "quatX", "quaternionX", "x");
+            Integer qy = first(h, "qy", "quatY", "quaternionY", "y");
+            Integer qz = first(h, "qz", "quatZ", "quaternionZ", "z");
+            Integer qw = first(h, "qw", "quatW", "quaternionW", "w");
+            boolean quaternion = qx != null && qy != null && qz != null && qw != null;
+            Integer yaw = first(h, "yaw", "azimuth", "heading");
+            Integer pitch = first(h, "pitch");
+            Integer roll = first(h, "roll");
+            if (!quaternion && (yaw == null || pitch == null || roll == null)) return result;
+            String line;
+            while ((line = reader.readLine()) != null) {
+                List<String> row = csv(line);
+                long sampleTime = time == null ? result.size() : lng(row, time).orElse((long) result.size());
+                if (quaternion) {
+                    Optional<Double> x = dbl(row, qx);
+                    Optional<Double> y = dbl(row, qy);
+                    Optional<Double> z = dbl(row, qz);
+                    Optional<Double> w = dbl(row, qw);
+                    if (x.isPresent() && y.isPresent() && z.isPresent() && w.isPresent()) {
+                        result.add(new RawOrientation(sampleTime, x.get(), y.get(), z.get(), w.get(), true));
+                    }
+                } else {
+                    Optional<Double> yv = dbl(row, yaw);
+                    Optional<Double> pv = dbl(row, pitch);
+                    Optional<Double> rv = dbl(row, roll);
+                    if (yv.isPresent() && pv.isPresent() && rv.isPresent()) {
+                        result.add(new RawOrientation(sampleTime, yv.get(), pv.get(), rv.get(), Double.NaN, false));
+                    }
+                }
+            }
+        }
+        result.sort(Comparator.comparingLong(RawOrientation::timeNanos));
         return result;
     }
 
