@@ -55,10 +55,10 @@ public final class SensorLoggerTrackLoader {
         if (barometer.isEmpty()) throw new IOException("Barometer.csv contains no usable altitude samples");
 
         int stableStart = stableStartIndex(allLocations, barometer);
-        List<LocationSample> locations = List.copyOf(allLocations.subList(stableStart, allLocations.size()));
-        GroundReference reference = reference(locations, barometer);
-        List<TrackPoint> points = points(locations, barometer, reference);
-        if (points.isEmpty()) throw new IOException("No usable track points with barometric altitude found");
+        long startTimeNanos = allLocations.get(stableStart).timeNanos();
+        GroundReference reference = reference(allLocations, barometer, startTimeNanos);
+        List<TrackPoint> points = points(allLocations, barometer, reference, startTimeNanos);
+        if (points.isEmpty()) throw new IOException("No usable merged telemetry points found");
         return new LoadedTrackData(files.summary(), reference, points, files.summary().metadata());
     }
 
@@ -72,7 +72,7 @@ public final class SensorLoggerTrackLoader {
             int usableAltitudeSamples = 0;
             for (int i = start; i < start + STABLE_WINDOW_SAMPLES; i++) {
                 LocationSample sample = locations.get(i);
-                double altitude = altitude(sample, barometer);
+                double altitude = altitude(sample.timeNanos(), barometer);
                 if (!Double.isNaN(altitude)) {
                     minAltitude = Math.min(minAltitude, altitude);
                     maxAltitude = Math.max(maxAltitude, altitude);
@@ -166,47 +166,74 @@ public final class SensorLoggerTrackLoader {
         return result;
     }
 
-    private GroundReference reference(List<LocationSample> locations, List<BarometerSample> barometer) throws IOException {
-        LocationSample lowestLocation = null;
-        double lowestAltitude = Double.NaN;
-        for (LocationSample location : locations) {
-            double candidateAltitude = altitude(location, barometer);
-            if (!Double.isNaN(candidateAltitude) && (lowestLocation == null || candidateAltitude < lowestAltitude)) {
-                lowestLocation = location;
-                lowestAltitude = candidateAltitude;
+    private GroundReference reference(List<LocationSample> locations, List<BarometerSample> barometer, long startTimeNanos) throws IOException {
+        MergedCursor cursor = new MergedCursor(locations, barometer, startTimeNanos);
+        MergedSample sample;
+        MergedSample lowest = null;
+        while ((sample = cursor.next()) != null) {
+            if (lowest == null || sample.barometricAltitudeMeters() < lowest.barometricAltitudeMeters()) {
+                lowest = sample;
             }
         }
-        if (lowestLocation == null) throw new IOException("No barometric altitude could be matched to location samples");
-        return new GroundReference(lowestLocation.latitude(), lowestLocation.longitude(), lowestAltitude);
+        if (lowest == null) throw new IOException("No merged telemetry sample with location and barometric altitude found");
+        return new GroundReference(lowest.latitude(), lowest.longitude(), lowest.barometricAltitudeMeters());
     }
 
-    private List<TrackPoint> points(List<LocationSample> locations, List<BarometerSample> barometer, GroundReference ref) {
+    private List<TrackPoint> points(List<LocationSample> locations, List<BarometerSample> barometer,
+                                    GroundReference ref, long startTimeNanos) {
         List<TrackPoint> result = new ArrayList<>();
-        for (LocationSample loc : locations) {
-            double baro = altitude(loc, barometer);
-            if (Double.isNaN(baro)) continue;
-            double x = Math.toRadians(loc.longitude() - ref.longitude()) * EARTH_RADIUS_METERS * Math.cos(Math.toRadians(ref.latitude()));
-            double y = Math.toRadians(loc.latitude() - ref.latitude()) * EARTH_RADIUS_METERS;
-            double z = baro - ref.barometricAltitudeMeters();
-            boolean moving = Math.abs(z) > 1.0 || Math.hypot(x, y) > 5.0 || (!Double.isNaN(loc.speedMetersPerSecond()) && loc.speedMetersPerSecond() > 1.5);
-            result.add(new TrackPoint(loc.timeNanos(), loc.secondsElapsed(), loc.latitude(), loc.longitude(), loc.gpsAltitudeMeters(), baro, loc.speedMetersPerSecond(), x, y, z, moving));
+        MergedCursor cursor = new MergedCursor(locations, barometer, startTimeNanos);
+        MergedSample sample;
+        long firstOutputTime = -1L;
+        while ((sample = cursor.next()) != null) {
+            if (firstOutputTime < 0L) firstOutputTime = sample.timeNanos();
+            double x = Math.toRadians(sample.longitude() - ref.longitude()) * EARTH_RADIUS_METERS * Math.cos(Math.toRadians(ref.latitude()));
+            double y = Math.toRadians(sample.latitude() - ref.latitude()) * EARTH_RADIUS_METERS;
+            double z = sample.barometricAltitudeMeters() - ref.barometricAltitudeMeters();
+            double secondsElapsed = (sample.timeNanos() - firstOutputTime) / 1_000_000_000.0;
+            boolean moving = Math.abs(z) > 1.0 || Math.hypot(x, y) > 5.0
+                    || (!Double.isNaN(sample.speedMetersPerSecond()) && sample.speedMetersPerSecond() > 1.5);
+            result.add(new TrackPoint(sample.timeNanos(), secondsElapsed, sample.latitude(), sample.longitude(),
+                    sample.gpsAltitudeMeters(), sample.barometricAltitudeMeters(), sample.speedMetersPerSecond(), x, y, z, moving));
         }
         return List.copyOf(result);
     }
 
-    private double altitude(LocationSample sample, List<BarometerSample> barometer) {
-        BarometerSample nearest = nearest(sample.timeNanos(), barometer);
+    private double altitude(long timeNanos, List<BarometerSample> barometer) {
+        BarometerSample nearest = nearest(timeNanos, barometer);
         return nearest == null ? Double.NaN : nearest.altitudeMeters();
     }
 
     private BarometerSample nearest(long time, List<BarometerSample> samples) {
-        BarometerSample best = null;
-        long bestDiff = Long.MAX_VALUE;
-        for (BarometerSample sample : samples) {
-            long diff = Math.abs(sample.timeNanos() - time);
-            if (diff < bestDiff) { best = sample; bestDiff = diff; }
+        if (samples.isEmpty()) return null;
+        int insertionPoint = firstBarometerIndexAtOrAfter(samples, time);
+        if (insertionPoint <= 0) return samples.get(0);
+        if (insertionPoint >= samples.size()) return samples.get(samples.size() - 1);
+        BarometerSample before = samples.get(insertionPoint - 1);
+        BarometerSample after = samples.get(insertionPoint);
+        return Math.abs(before.timeNanos() - time) <= Math.abs(after.timeNanos() - time) ? before : after;
+    }
+
+    private int firstLocationIndexAtOrAfter(List<LocationSample> samples, long timeNanos) {
+        int low = 0;
+        int high = samples.size();
+        while (low < high) {
+            int mid = (low + high) >>> 1;
+            if (samples.get(mid).timeNanos() < timeNanos) low = mid + 1;
+            else high = mid;
         }
-        return best;
+        return low;
+    }
+
+    private int firstBarometerIndexAtOrAfter(List<BarometerSample> samples, long timeNanos) {
+        int low = 0;
+        int high = samples.size();
+        while (low < high) {
+            int mid = (low + high) >>> 1;
+            if (samples.get(mid).timeNanos() < timeNanos) low = mid + 1;
+            else high = mid;
+        }
+        return low;
     }
 
     private CsvHead head(Path file) throws IOException {
@@ -311,10 +338,50 @@ public final class SensorLoggerTrackLoader {
         return result;
     }
 
+    private final class MergedCursor {
+        private final List<LocationSample> locations;
+        private final List<BarometerSample> barometer;
+        private int locationIndex;
+        private int barometerIndex;
+        private LocationSample lastLocation;
+        private BarometerSample lastBarometer;
+
+        private MergedCursor(List<LocationSample> locations, List<BarometerSample> barometer, long startTimeNanos) {
+            this.locations = locations;
+            this.barometer = barometer;
+            this.locationIndex = firstLocationIndexAtOrAfter(locations, startTimeNanos);
+            this.barometerIndex = firstBarometerIndexAtOrAfter(barometer, startTimeNanos);
+            if (locationIndex > 0) this.lastLocation = locations.get(locationIndex - 1);
+            if (barometerIndex > 0) this.lastBarometer = barometer.get(barometerIndex - 1);
+        }
+
+        private MergedSample next() {
+            while (locationIndex < locations.size() || barometerIndex < barometer.size()) {
+                long nextLocationTime = locationIndex < locations.size() ? locations.get(locationIndex).timeNanos() : Long.MAX_VALUE;
+                long nextBarometerTime = barometerIndex < barometer.size() ? barometer.get(barometerIndex).timeNanos() : Long.MAX_VALUE;
+                long nextTime = Math.min(nextLocationTime, nextBarometerTime);
+
+                while (locationIndex < locations.size() && locations.get(locationIndex).timeNanos() == nextTime) {
+                    lastLocation = locations.get(locationIndex++);
+                }
+                while (barometerIndex < barometer.size() && barometer.get(barometerIndex).timeNanos() == nextTime) {
+                    lastBarometer = barometer.get(barometerIndex++);
+                }
+
+                if (lastLocation != null && lastBarometer != null) {
+                    return new MergedSample(nextTime, lastLocation.latitude(), lastLocation.longitude(),
+                            lastLocation.gpsAltitudeMeters(), lastBarometer.altitudeMeters(), lastLocation.speedMetersPerSecond());
+                }
+            }
+            return null;
+        }
+    }
+
     private record CsvHead(List<String> headers, int rows) {}
     private record TrackFiles(TrackSummary summary, Map<String, Path> files) {
         Optional<Path> csv(String name) { return Optional.ofNullable(files.get(name.toLowerCase(Locale.ROOT))); }
     }
     private record LocationSample(long timeNanos, double secondsElapsed, double latitude, double longitude, double gpsAltitudeMeters, double speedMetersPerSecond) {}
     private record BarometerSample(long timeNanos, double altitudeMeters) {}
+    private record MergedSample(long timeNanos, double latitude, double longitude, double gpsAltitudeMeters, double barometricAltitudeMeters, double speedMetersPerSecond) {}
 }
