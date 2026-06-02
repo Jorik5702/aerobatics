@@ -7,8 +7,6 @@ import java.util.Locale;
 
 final class TelemetryFusionEngine {
     private static final double EARTH_RADIUS_METERS = 6_378_137.0;
-    private static final double GPS_POSITION_GAIN = 0.18;
-    private static final double GPS_VELOCITY_GAIN = 0.12;
 
     LoadedTrackData load(TrackSummary summary) throws IOException {
         Path directory = summary.directory();
@@ -25,14 +23,15 @@ final class TelemetryFusionEngine {
         AccelBias bias = estimateBias(accelerometer, startTime);
         Mount mount = detectMount(gravity, startTime);
         GroundReference reference = lowestReference(locations, barometer, accelerometer, gravity, startTime);
-        List<TrackPoint> points = fusedPoints(locations, barometer, accelerometer, gravity, reference, bias, startTime);
+        List<TrackPoint> points = fusedPoints(locations, barometer, accelerometer, gravity, reference, startTime);
         if (points.isEmpty()) throw new IOException("No usable fused telemetry points found");
 
         System.out.printf("Telemetry fusion: locations=%d, barometer=%d, accelerometer=%d, gravity=%d, fusedPoints=%d%n",
                 locations.size(), barometer.size(), accelerometer.size(), gravity.size(), points.size());
-        System.out.println("Telemetry fusion mode: GPS-corrected IMU prediction; barometer is vertical truth.");
-        System.out.printf("Phone mount assumption: flat/top-forward. Gravity diagnostic: %s%n", mount.description());
-        System.out.printf("Accelerometer initial bias: x=%.4f, y=%.4f, z=%.4f%n", bias.x(), bias.y(), bias.z());
+        System.out.println("Telemetry fusion mode: conservative multi-rate timeline; GPS is horizontal truth, barometer is vertical truth.");
+        System.out.println("Accelerometer and gravity are parsed for diagnostics only until the EKF orientation model is implemented.");
+        System.out.printf("Phone mount diagnostic: %s%n", mount.description());
+        System.out.printf("Accelerometer initial bias diagnostic: x=%.4f, y=%.4f, z=%.4f%n", bias.x(), bias.y(), bias.z());
         return new LoadedTrackData(summary, reference, points, summary.metadata());
     }
 
@@ -51,23 +50,22 @@ final class TelemetryFusionEngine {
 
     private List<TrackPoint> fusedPoints(List<RawLocation> locations, List<RawBarometer> barometer,
                                          List<RawVector> accelerometer, List<RawVector> gravity,
-                                         GroundReference reference, AccelBias bias, long startTime) {
+                                         GroundReference reference, long startTime) {
         java.util.ArrayList<TrackPoint> result = new java.util.ArrayList<>();
-        FusionState state = new FusionState(reference, bias);
         MergedCursor cursor = new MergedCursor(locations, barometer, accelerometer, gravity, startTime);
         long firstTime = -1L;
         MergedSample sample;
         while ((sample = cursor.next()) != null) {
             if (firstTime < 0L) firstTime = sample.timeNanos();
-            FusedPosition position = state.update(sample);
+            RawLocation location = sample.location();
+            double x = gpsX(location, reference);
+            double y = gpsY(location, reference);
             double z = sample.baroAltitude() - reference.barometricAltitudeMeters();
             double seconds = (sample.timeNanos() - firstTime) / 1_000_000_000.0;
-            RawLocation location = sample.location();
-            boolean moving = Math.abs(z) > 1.0 || Math.hypot(position.x(), position.y()) > 5.0
+            boolean moving = Math.abs(z) > 1.0 || Math.hypot(x, y) > 5.0
                     || (!Double.isNaN(location.speedMetersPerSecond()) && location.speedMetersPerSecond() > 1.5);
             result.add(new TrackPoint(sample.timeNanos(), seconds, location.latitude(), location.longitude(),
-                    location.gpsAltitudeMeters(), sample.baroAltitude(), location.speedMetersPerSecond(),
-                    position.x(), position.y(), z, moving));
+                    location.gpsAltitudeMeters(), sample.baroAltitude(), location.speedMetersPerSecond(), x, y, z, moving));
         }
         return List.copyOf(result);
     }
@@ -88,7 +86,7 @@ final class TelemetryFusionEngine {
     private Mount detectMount(List<RawVector> gravity, long startTime) {
         int start = firstVectorAtOrAfter(gravity, startTime);
         int end = Math.min(gravity.size(), start + 250);
-        if (start >= end) return new Mount("no gravity data; using default device +Y forward, +X right, +Z up");
+        if (start >= end) return new Mount("no gravity data; default mount not applied to position");
         double sx = 0.0, sy = 0.0, sz = 0.0;
         for (int i = start; i < end; i++) {
             RawVector s = gravity.get(i);
@@ -111,70 +109,6 @@ final class TelemetryFusionEngine {
     private int firstLocationAtOrAfter(List<RawLocation> s, long t) { int lo = 0, hi = s.size(); while (lo < hi) { int m = (lo + hi) >>> 1; if (s.get(m).timeNanos() < t) lo = m + 1; else hi = m; } return lo; }
     private int firstBarometerAtOrAfter(List<RawBarometer> s, long t) { int lo = 0, hi = s.size(); while (lo < hi) { int m = (lo + hi) >>> 1; if (s.get(m).timeNanos() < t) lo = m + 1; else hi = m; } return lo; }
     private int firstVectorAtOrAfter(List<RawVector> s, long t) { int lo = 0, hi = s.size(); while (lo < hi) { int m = (lo + hi) >>> 1; if (s.get(m).timeNanos() < t) lo = m + 1; else hi = m; } return lo; }
-
-    private final class FusionState {
-        private final GroundReference reference;
-        private final AccelBias bias;
-        private boolean initialized;
-        private long lastTime;
-        private double x;
-        private double y;
-        private double vx;
-        private double vy;
-        private double heading;
-        private RawLocation previousGps;
-
-        FusionState(GroundReference reference, AccelBias bias) {
-            this.reference = reference;
-            this.bias = bias;
-        }
-
-        FusedPosition update(MergedSample sample) {
-            double gpsX = gpsX(sample.location(), reference);
-            double gpsY = gpsY(sample.location(), reference);
-            if (!initialized) {
-                initialized = true;
-                lastTime = sample.timeNanos();
-                previousGps = sample.location();
-                x = gpsX;
-                y = gpsY;
-                return new FusedPosition(x, y);
-            }
-            double dt = Math.max(0.0, (sample.timeNanos() - lastTime) / 1_000_000_000.0);
-            lastTime = sample.timeNanos();
-            if (dt > 0.0 && dt < 1.0) {
-                updateHeading(sample.location());
-                RawVector acc = sample.accelerometer();
-                if (acc != null) {
-                    double forward = acc.y() - bias.y();
-                    double right = acc.x() - bias.x();
-                    double eastAcc = Math.sin(heading) * forward + Math.cos(heading) * right;
-                    double northAcc = Math.cos(heading) * forward - Math.sin(heading) * right;
-                    vx += eastAcc * dt;
-                    vy += northAcc * dt;
-                }
-                x += vx * dt;
-                y += vy * dt;
-            }
-            double dx = gpsX - x;
-            double dy = gpsY - y;
-            x += GPS_POSITION_GAIN * dx;
-            y += GPS_POSITION_GAIN * dy;
-            if (dt > 0.0 && dt < 1.0) {
-                vx += GPS_VELOCITY_GAIN * dx / dt;
-                vy += GPS_VELOCITY_GAIN * dy / dt;
-            }
-            return new FusedPosition(x, y);
-        }
-
-        private void updateHeading(RawLocation location) {
-            if (previousGps == null || location.timeNanos() == previousGps.timeNanos()) return;
-            double dx = gpsX(location, reference) - gpsX(previousGps, reference);
-            double dy = gpsY(location, reference) - gpsY(previousGps, reference);
-            if (Math.hypot(dx, dy) > 0.8) heading = Math.atan2(dx, dy);
-            previousGps = location;
-        }
-    }
 
     private final class MergedCursor {
         private final List<RawLocation> locations;
@@ -227,5 +161,4 @@ final class TelemetryFusionEngine {
     private record AccelBias(double x, double y, double z) {}
     private record Mount(String description) {}
     private record MergedSample(long timeNanos, RawLocation location, double baroAltitude, RawVector accelerometer, RawVector gravity) {}
-    private record FusedPosition(double x, double y) {}
 }
