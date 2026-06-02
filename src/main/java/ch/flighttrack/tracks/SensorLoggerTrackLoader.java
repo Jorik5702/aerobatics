@@ -152,7 +152,7 @@ public final class SensorLoggerTrackLoader {
             if (header == null) return result;
             Map<String, Integer> h = index(csv(header));
             Integer time = first(h, "time", "timestamp");
-            Integer altitude = first(h, "relative_altitude", "altitude", "barometric_altitude", "altitude_meters");
+            Integer altitude = first(h, "relativeAltitude", "relative_altitude", "altitude", "barometric_altitude", "altitude_meters");
             if (altitude == null) return result;
             String line;
             while ((line = reader.readLine()) != null) {
@@ -265,7 +265,11 @@ public final class SensorLoggerTrackLoader {
 
     private Map<String, Integer> index(List<String> headers) {
         Map<String, Integer> result = new HashMap<>();
-        for (int i = 0; i < headers.size(); i++) result.put(headers.get(i).trim().toLowerCase(Locale.ROOT), i);
+        for (int i = 0; i < headers.size(); i++) {
+            String header = headers.get(i).trim();
+            result.put(header.toLowerCase(Locale.ROOT), i);
+            result.put(normalizedHeader(header), i);
+        }
         return result;
     }
 
@@ -273,8 +277,14 @@ public final class SensorLoggerTrackLoader {
         for (String name : names) {
             Integer value = index.get(name.toLowerCase(Locale.ROOT));
             if (value != null) return value;
+            value = index.get(normalizedHeader(name));
+            if (value != null) return value;
         }
         return null;
+    }
+
+    private String normalizedHeader(String header) {
+        return header.trim().toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
     }
 
     private Optional<Double> dbl(List<String> row, int index) {
