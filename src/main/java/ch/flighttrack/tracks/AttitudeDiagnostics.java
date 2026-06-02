@@ -43,13 +43,12 @@ final class AttitudeDiagnostics {
 
         RawOrientation first = orientations.get(firstOrientationAtOrAfter(orientations, startTimeNanos));
         double[] up = rotate(first, 0.0, 0.0, 1.0);
-        double[] forward = axisVector(best.name);
-        double[] bestForward = rotate(first, forward[0], forward[1], forward[2]);
+        double[] selectedForward = rotate(first, PhoneMount.FORWARD_X, PhoneMount.FORWARD_Y, PhoneMount.FORWARD_Z);
 
         return String.format(Locale.ROOT,
-                "best forward axis=%s, mean heading error=%.1f deg over %d samples; first up vector=(%.3f, %.3f, %.3f), first best-forward vector=(%.3f, %.3f, %.3f)",
-                best.name, Math.toDegrees(best.meanAbsError()), best.count,
-                up[0], up[1], up[2], bestForward[0], bestForward[1], bestForward[2]);
+                "best forward axis=%s, mean heading error=%.1f deg over %d samples; selected mount=%s; first up vector=(%.3f, %.3f, %.3f), first selected-forward vector=(%.3f, %.3f, %.3f)",
+                best.name, Math.toDegrees(best.meanAbsError()), best.count, PhoneMount.FORWARD_AXIS,
+                up[0], up[1], up[2], selectedForward[0], selectedForward[1], selectedForward[2]);
     }
 
     private AxisStats best(AxisStats... stats) {
@@ -58,15 +57,6 @@ final class AttitudeDiagnostics {
             if (stat.count > 0 && (best.count == 0 || stat.meanAbsError() < best.meanAbsError())) best = stat;
         }
         return best;
-    }
-
-    private double[] axisVector(String name) {
-        return switch (name) {
-            case "device -Y forward" -> new double[]{0.0, -1.0, 0.0};
-            case "device +X forward" -> new double[]{1.0, 0.0, 0.0};
-            case "device -X forward" -> new double[]{-1.0, 0.0, 0.0};
-            default -> new double[]{0.0, 1.0, 0.0};
-        };
     }
 
     private double headingOfRotatedAxis(RawOrientation orientation, double x, double y, double z) {
