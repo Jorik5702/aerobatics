@@ -55,9 +55,12 @@ public final class TrackRenderer {
     private int trackVbo;
     private int axesVao;
     private int axesVbo;
+    private int groundVao;
+    private int groundVbo;
     private int originVao;
     private int originVbo;
     private int pointCount;
+    private int groundPointCount;
     private float trackScale = 1.0f;
     private float centerX;
     private float centerY;
@@ -73,9 +76,12 @@ public final class TrackRenderer {
         trackVbo = glGenBuffers();
         axesVao = glGenVertexArrays();
         axesVbo = glGenBuffers();
+        groundVao = glGenVertexArrays();
+        groundVbo = glGenBuffers();
         originVao = glGenVertexArrays();
         originVbo = glGenBuffers();
         uploadAxes();
+        uploadGround(2.2f);
         uploadOrigin();
     }
 
@@ -101,8 +107,8 @@ public final class TrackRenderer {
         FloatBuffer vertices = BufferUtils.createFloatBuffer(points.size() * 3);
         for (TrackPoint point : points) {
             vertices.put((float) ((point.xMeters() - centerX) * trackScale));
-            vertices.put((float) ((point.zMeters() - centerZ) * trackScale));
-            vertices.put((float) (-(point.yMeters() - centerY) * trackScale));
+            vertices.put((float) (point.zMeters() * trackScale));
+            vertices.put((float) (-(point.yMeters() - centerZ) * trackScale));
         }
         vertices.flip();
         uploadBuffer(trackVao, trackVbo, vertices);
@@ -121,6 +127,11 @@ public final class TrackRenderer {
 
         glUseProgram(program);
         glUniformMatrix4fv(mvpUniform, false, mvp);
+
+        glBindVertexArray(groundVao);
+        glPointSize(2.0f);
+        glUniform3f(colorUniform, 0.28f, 0.32f, 0.36f);
+        glDrawArrays(GL_POINTS, 0, groundPointCount);
 
         glBindVertexArray(axesVao);
         glLineWidth(2.0f);
@@ -146,9 +157,11 @@ public final class TrackRenderer {
     public void cleanup() {
         if (trackVbo != 0) glDeleteBuffers(trackVbo);
         if (axesVbo != 0) glDeleteBuffers(axesVbo);
+        if (groundVbo != 0) glDeleteBuffers(groundVbo);
         if (originVbo != 0) glDeleteBuffers(originVbo);
         if (trackVao != 0) glDeleteVertexArrays(trackVao);
         if (axesVao != 0) glDeleteVertexArrays(axesVao);
+        if (groundVao != 0) glDeleteVertexArrays(groundVao);
         if (originVao != 0) glDeleteVertexArrays(originVao);
         if (program != 0) glDeleteProgram(program);
     }
@@ -156,12 +169,28 @@ public final class TrackRenderer {
     private void uploadAxes() {
         float[] axes = {
                 -2.2f, 0.0f, 0.0f, 2.2f, 0.0f, 0.0f,
-                0.0f, -2.2f, 0.0f, 0.0f, 2.2f, 0.0f,
-                0.0f, 0.0f, -2.2f, 0.0f, 0.0f, 2.2f
+                0.0f, 0.0f, -2.2f, 0.0f, 0.0f, 2.2f,
+                0.0f, 0.0f, 0.0f, 0.0f, 2.2f, 0.0f
         };
         FloatBuffer vertices = BufferUtils.createFloatBuffer(axes.length);
         vertices.put(axes).flip();
         uploadBuffer(axesVao, axesVbo, vertices);
+    }
+
+    private void uploadGround(float halfSize) {
+        float step = 0.22f;
+        int pointsPerSide = (int) (halfSize * 2.0f / step) + 1;
+        groundPointCount = pointsPerSide * pointsPerSide;
+        FloatBuffer vertices = BufferUtils.createFloatBuffer(groundPointCount * 3);
+        for (int xIndex = 0; xIndex < pointsPerSide; xIndex++) {
+            float x = -halfSize + xIndex * step;
+            for (int zIndex = 0; zIndex < pointsPerSide; zIndex++) {
+                float z = -halfSize + zIndex * step;
+                vertices.put(x).put(0.0f).put(z);
+            }
+        }
+        vertices.flip();
+        uploadBuffer(groundVao, groundVbo, vertices);
     }
 
     private void uploadOrigin() {
