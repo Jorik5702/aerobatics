@@ -5,9 +5,21 @@ final class OrientationMath {
     }
 
     static double selectedForwardHeading(RawOrientation orientation) {
-        if (orientation == null || !orientation.quaternion()) return Double.NaN;
-        double[] forward = rotate(orientation, PhoneMount.FORWARD_X, PhoneMount.FORWARD_Y, PhoneMount.FORWARD_Z);
+        double[] forward = selectedForwardVector(orientation);
+        if (forward == null) return Double.NaN;
         return Math.atan2(forward[0], forward[1]);
+    }
+
+    static double selectedForwardPitch(RawOrientation orientation) {
+        double[] forward = selectedForwardVector(orientation);
+        if (forward == null) return Double.NaN;
+        double horizontal = Math.hypot(forward[0], forward[1]);
+        return Math.atan2(forward[2], horizontal);
+    }
+
+    static double[] selectedForwardVector(RawOrientation orientation) {
+        if (orientation == null || !orientation.quaternion()) return null;
+        return rotate(orientation, PhoneMount.FORWARD_X, PhoneMount.FORWARD_Y, PhoneMount.FORWARD_Z);
     }
 
     static double[] rotate(RawOrientation orientation, double vx, double vy, double vz) {
