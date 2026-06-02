@@ -30,14 +30,14 @@ final class TelemetryFusionEngine {
         String attitudeDiagnostic = new AttitudeDiagnostics().diagnose(locations, orientation, startTime);
         VectorDiagnostic magneticDiagnostic = diagnoseVector("magnetometer", magnetometer, startTime);
         VectorDiagnostic uncalibratedAccelDiagnostic = diagnoseVector("accelerometer uncalibrated", accelerometerUncalibrated, startTime);
-        GroundReference reference = lowestReference(locations, barometer, accelerometer, gravity, startTime);
-        List<TrackPoint> points = fusedPoints(locations, barometer, accelerometer, gravity, reference, startTime);
+        GroundReference reference = lowestReference(locations, barometer, accelerometer, gravity, orientation, startTime);
+        List<TrackPoint> points = fusedPoints(locations, barometer, accelerometer, gravity, orientation, reference, startTime);
         if (points.isEmpty()) throw new IOException("No usable fused telemetry points found");
 
         System.out.printf("Telemetry fusion: locations=%d, barometer=%d, accelerometer=%d, accelUncalibrated=%d, gravity=%d, magnetometer=%d, magnetometerUncalibrated=%d, orientation=%d, fusedPoints=%d%n",
                 locations.size(), barometer.size(), accelerometer.size(), accelerometerUncalibrated.size(), gravity.size(), magnetometer.size(), magnetometerUncalibrated.size(), orientation.size(), points.size());
         System.out.println("Telemetry fusion mode: conservative multi-rate timeline; GPS is horizontal truth, barometer is vertical truth.");
-        System.out.println("IMU/orientation/magnetometer are parsed for diagnostics only until the EKF orientation model is implemented.");
+        System.out.println("Plane symbol heading uses the selected orientation mount when quaternion data is available.");
         System.out.printf("Phone mount diagnostic: %s%n", mount.description());
         System.out.printf("Orientation diagnostic: %s%n", orientationDiagnostic.description());
         System.out.printf("Attitude/GPS course diagnostic: %s%n", attitudeDiagnostic);
@@ -49,8 +49,8 @@ final class TelemetryFusionEngine {
 
     private GroundReference lowestReference(List<RawLocation> locations, List<RawBarometer> barometer,
                                             List<RawVector> accelerometer, List<RawVector> gravity,
-                                            long startTime) throws IOException {
-        MergedCursor cursor = new MergedCursor(locations, barometer, accelerometer, gravity, startTime);
+                                            List<RawOrientation> orientation, long startTime) throws IOException {
+        MergedCursor cursor = new MergedCursor(locations, barometer, accelerometer, gravity, orientation, startTime);
         MergedSample lowest = null;
         MergedSample sample;
         while ((sample = cursor.next()) != null) {
@@ -62,9 +62,10 @@ final class TelemetryFusionEngine {
 
     private List<TrackPoint> fusedPoints(List<RawLocation> locations, List<RawBarometer> barometer,
                                          List<RawVector> accelerometer, List<RawVector> gravity,
+                                         List<RawOrientation> orientation,
                                          GroundReference reference, long startTime) {
         java.util.ArrayList<TrackPoint> result = new java.util.ArrayList<>();
-        MergedCursor cursor = new MergedCursor(locations, barometer, accelerometer, gravity, startTime);
+        MergedCursor cursor = new MergedCursor(locations, barometer, accelerometer, gravity, orientation, startTime);
         long firstTime = -1L;
         MergedSample sample;
         while ((sample = cursor.next()) != null) {
@@ -74,10 +75,11 @@ final class TelemetryFusionEngine {
             double y = gpsY(location, reference);
             double z = sample.baroAltitude() - reference.barometricAltitudeMeters();
             double seconds = (sample.timeNanos() - firstTime) / 1_000_000_000.0;
+            double heading = OrientationMath.selectedForwardHeading(sample.orientation());
             boolean moving = Math.abs(z) > 1.0 || Math.hypot(x, y) > 5.0
                     || (!Double.isNaN(location.speedMetersPerSecond()) && location.speedMetersPerSecond() > 1.5);
             result.add(new TrackPoint(sample.timeNanos(), seconds, location.latitude(), location.longitude(),
-                    location.gpsAltitudeMeters(), sample.baroAltitude(), location.speedMetersPerSecond(), x, y, z, moving));
+                    location.gpsAltitudeMeters(), sample.baroAltitude(), location.speedMetersPerSecond(), x, y, z, moving, heading));
         }
         return List.copyOf(result);
     }
@@ -160,44 +162,53 @@ final class TelemetryFusionEngine {
         private final List<RawBarometer> barometer;
         private final List<RawVector> accelerometer;
         private final List<RawVector> gravity;
+        private final List<RawOrientation> orientation;
         private int locationIndex;
         private int barometerIndex;
         private int accelerometerIndex;
         private int gravityIndex;
+        private int orientationIndex;
         private RawLocation lastLocation;
         private RawBarometer lastBarometer;
         private RawVector lastAccelerometer;
         private RawVector lastGravity;
+        private RawOrientation lastOrientation;
 
         MergedCursor(List<RawLocation> locations, List<RawBarometer> barometer, List<RawVector> accelerometer,
-                     List<RawVector> gravity, long startTime) {
+                     List<RawVector> gravity, List<RawOrientation> orientation, long startTime) {
             this.locations = locations;
             this.barometer = barometer;
             this.accelerometer = accelerometer;
             this.gravity = gravity;
+            this.orientation = orientation;
             locationIndex = firstLocationAtOrAfter(locations, startTime);
             barometerIndex = firstBarometerAtOrAfter(barometer, startTime);
             accelerometerIndex = firstVectorAtOrAfter(accelerometer, startTime);
             gravityIndex = firstVectorAtOrAfter(gravity, startTime);
+            orientationIndex = firstOrientationAtOrAfter(orientation, startTime);
             if (locationIndex > 0) lastLocation = locations.get(locationIndex - 1);
             if (barometerIndex > 0) lastBarometer = barometer.get(barometerIndex - 1);
             if (accelerometerIndex > 0) lastAccelerometer = accelerometer.get(accelerometerIndex - 1);
             if (gravityIndex > 0) lastGravity = gravity.get(gravityIndex - 1);
+            if (orientationIndex > 0 && !orientation.isEmpty()) lastOrientation = orientation.get(orientationIndex - 1);
         }
 
         MergedSample next() {
             while (locationIndex < locations.size() || barometerIndex < barometer.size()
-                    || accelerometerIndex < accelerometer.size() || gravityIndex < gravity.size()) {
+                    || accelerometerIndex < accelerometer.size() || gravityIndex < gravity.size()
+                    || orientationIndex < orientation.size()) {
                 long next = Long.MAX_VALUE;
                 if (locationIndex < locations.size()) next = Math.min(next, locations.get(locationIndex).timeNanos());
                 if (barometerIndex < barometer.size()) next = Math.min(next, barometer.get(barometerIndex).timeNanos());
                 if (accelerometerIndex < accelerometer.size()) next = Math.min(next, accelerometer.get(accelerometerIndex).timeNanos());
                 if (gravityIndex < gravity.size()) next = Math.min(next, gravity.get(gravityIndex).timeNanos());
+                if (orientationIndex < orientation.size()) next = Math.min(next, orientation.get(orientationIndex).timeNanos());
                 while (locationIndex < locations.size() && locations.get(locationIndex).timeNanos() == next) lastLocation = locations.get(locationIndex++);
                 while (barometerIndex < barometer.size() && barometer.get(barometerIndex).timeNanos() == next) lastBarometer = barometer.get(barometerIndex++);
                 while (accelerometerIndex < accelerometer.size() && accelerometer.get(accelerometerIndex).timeNanos() == next) lastAccelerometer = accelerometer.get(accelerometerIndex++);
                 while (gravityIndex < gravity.size() && gravity.get(gravityIndex).timeNanos() == next) lastGravity = gravity.get(gravityIndex++);
-                if (lastLocation != null && lastBarometer != null) return new MergedSample(next, lastLocation, lastBarometer.altitudeMeters(), lastAccelerometer, lastGravity);
+                while (orientationIndex < orientation.size() && orientation.get(orientationIndex).timeNanos() == next) lastOrientation = orientation.get(orientationIndex++);
+                if (lastLocation != null && lastBarometer != null) return new MergedSample(next, lastLocation, lastBarometer.altitudeMeters(), lastAccelerometer, lastGravity, lastOrientation);
             }
             return null;
         }
@@ -207,5 +218,5 @@ final class TelemetryFusionEngine {
     private record Mount(String description) {}
     private record OrientationDiagnostic(String description) {}
     private record VectorDiagnostic(String description) {}
-    private record MergedSample(long timeNanos, RawLocation location, double baroAltitude, RawVector accelerometer, RawVector gravity) {}
+    private record MergedSample(long timeNanos, RawLocation location, double baroAltitude, RawVector accelerometer, RawVector gravity, RawOrientation orientation) {}
 }
