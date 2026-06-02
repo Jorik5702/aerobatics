@@ -14,7 +14,11 @@ final class TelemetryFusionEngine {
         List<RawLocation> locations = reader.locations(directory.resolve("Location.csv"));
         List<RawBarometer> barometer = reader.barometer(directory.resolve("Barometer.csv"));
         List<RawVector> accelerometer = reader.vector(directory.resolve("Accelerometer.csv"));
+        List<RawVector> accelerometerUncalibrated = reader.vector(directory.resolve("AccelerometerUncalibrated.csv"));
         List<RawVector> gravity = reader.vector(directory.resolve("Gravity.csv"));
+        List<RawVector> magnetometer = reader.vector(directory.resolve("Magnetometer.csv"));
+        List<RawVector> magnetometerUncalibrated = reader.vector(directory.resolve("MagnetometerUncalibrated.csv"));
+        List<RawOrientation> orientation = reader.orientation(directory.resolve("Orientation.csv"));
 
         if (locations.isEmpty()) throw new IOException("Location.csv contains no usable location samples");
         if (barometer.isEmpty()) throw new IOException("Barometer.csv contains no usable barometric samples");
@@ -22,15 +26,21 @@ final class TelemetryFusionEngine {
         long startTime = locations.get(0).timeNanos();
         AccelBias bias = estimateBias(accelerometer, startTime);
         Mount mount = detectMount(gravity, startTime);
+        OrientationDiagnostic orientationDiagnostic = diagnoseOrientation(orientation, startTime);
+        VectorDiagnostic magneticDiagnostic = diagnoseVector("magnetometer", magnetometer, startTime);
+        VectorDiagnostic uncalibratedAccelDiagnostic = diagnoseVector("accelerometer uncalibrated", accelerometerUncalibrated, startTime);
         GroundReference reference = lowestReference(locations, barometer, accelerometer, gravity, startTime);
         List<TrackPoint> points = fusedPoints(locations, barometer, accelerometer, gravity, reference, startTime);
         if (points.isEmpty()) throw new IOException("No usable fused telemetry points found");
 
-        System.out.printf("Telemetry fusion: locations=%d, barometer=%d, accelerometer=%d, gravity=%d, fusedPoints=%d%n",
-                locations.size(), barometer.size(), accelerometer.size(), gravity.size(), points.size());
+        System.out.printf("Telemetry fusion: locations=%d, barometer=%d, accelerometer=%d, accelUncalibrated=%d, gravity=%d, magnetometer=%d, magnetometerUncalibrated=%d, orientation=%d, fusedPoints=%d%n",
+                locations.size(), barometer.size(), accelerometer.size(), accelerometerUncalibrated.size(), gravity.size(), magnetometer.size(), magnetometerUncalibrated.size(), orientation.size(), points.size());
         System.out.println("Telemetry fusion mode: conservative multi-rate timeline; GPS is horizontal truth, barometer is vertical truth.");
-        System.out.println("Accelerometer and gravity are parsed for diagnostics only until the EKF orientation model is implemented.");
+        System.out.println("IMU/orientation/magnetometer are parsed for diagnostics only until the EKF orientation model is implemented.");
         System.out.printf("Phone mount diagnostic: %s%n", mount.description());
+        System.out.printf("Orientation diagnostic: %s%n", orientationDiagnostic.description());
+        System.out.printf("Magnetometer diagnostic: %s%n", magneticDiagnostic.description());
+        System.out.printf("Uncalibrated accelerometer diagnostic: %s%n", uncalibratedAccelDiagnostic.description());
         System.out.printf("Accelerometer initial bias diagnostic: x=%.4f, y=%.4f, z=%.4f%n", bias.x(), bias.y(), bias.z());
         return new LoadedTrackData(summary, reference, points, summary.metadata());
     }
@@ -98,6 +108,34 @@ final class TelemetryFusionEngine {
         return new Mount(String.format(Locale.ROOT, "avg gravity x=%.3f y=%.3f z=%.3f, %s", gx, gy, gz, side));
     }
 
+    private OrientationDiagnostic diagnoseOrientation(List<RawOrientation> samples, long startTime) {
+        int start = firstOrientationAtOrAfter(samples, startTime);
+        if (start >= samples.size()) return new OrientationDiagnostic("no orientation data parsed");
+        RawOrientation sample = samples.get(start);
+        if (sample.quaternion()) {
+            double norm = Math.sqrt(sample.x() * sample.x() + sample.y() * sample.y() + sample.z() * sample.z() + sample.w() * sample.w());
+            return new OrientationDiagnostic(String.format(Locale.ROOT,
+                    "first quaternion at %.3fs: x=%.4f y=%.4f z=%.4f w=%.4f norm=%.4f",
+                    (sample.timeNanos() - startTime) / 1_000_000_000.0, sample.x(), sample.y(), sample.z(), sample.w(), norm));
+        }
+        return new OrientationDiagnostic(String.format(Locale.ROOT,
+                "first yaw/pitch/roll-style sample at %.3fs: yaw=%.3f pitch=%.3f roll=%.3f",
+                (sample.timeNanos() - startTime) / 1_000_000_000.0, sample.x(), sample.y(), sample.z()));
+    }
+
+    private VectorDiagnostic diagnoseVector(String name, List<RawVector> samples, long startTime) {
+        int start = firstVectorAtOrAfter(samples, startTime);
+        int end = Math.min(samples.size(), start + 250);
+        if (start >= end) return new VectorDiagnostic("no " + name + " data parsed");
+        double sx = 0.0, sy = 0.0, sz = 0.0;
+        for (int i = start; i < end; i++) {
+            RawVector s = samples.get(i);
+            sx += s.x(); sy += s.y(); sz += s.z();
+        }
+        int n = end - start;
+        return new VectorDiagnostic(String.format(Locale.ROOT, "initial avg x=%.4f y=%.4f z=%.4f from %d samples", sx / n, sy / n, sz / n, n));
+    }
+
     private double gpsX(RawLocation l, GroundReference r) {
         return Math.toRadians(l.longitude() - r.longitude()) * EARTH_RADIUS_METERS * Math.cos(Math.toRadians(r.latitude()));
     }
@@ -109,6 +147,7 @@ final class TelemetryFusionEngine {
     private int firstLocationAtOrAfter(List<RawLocation> s, long t) { int lo = 0, hi = s.size(); while (lo < hi) { int m = (lo + hi) >>> 1; if (s.get(m).timeNanos() < t) lo = m + 1; else hi = m; } return lo; }
     private int firstBarometerAtOrAfter(List<RawBarometer> s, long t) { int lo = 0, hi = s.size(); while (lo < hi) { int m = (lo + hi) >>> 1; if (s.get(m).timeNanos() < t) lo = m + 1; else hi = m; } return lo; }
     private int firstVectorAtOrAfter(List<RawVector> s, long t) { int lo = 0, hi = s.size(); while (lo < hi) { int m = (lo + hi) >>> 1; if (s.get(m).timeNanos() < t) lo = m + 1; else hi = m; } return lo; }
+    private int firstOrientationAtOrAfter(List<RawOrientation> s, long t) { int lo = 0, hi = s.size(); while (lo < hi) { int m = (lo + hi) >>> 1; if (s.get(m).timeNanos() < t) lo = m + 1; else hi = m; } return lo; }
 
     private final class MergedCursor {
         private final List<RawLocation> locations;
@@ -160,5 +199,7 @@ final class TelemetryFusionEngine {
 
     private record AccelBias(double x, double y, double z) {}
     private record Mount(String description) {}
+    private record OrientationDiagnostic(String description) {}
+    private record VectorDiagnostic(String description) {}
     private record MergedSample(long timeNanos, RawLocation location, double baroAltitude, RawVector accelerometer, RawVector gravity) {}
 }
