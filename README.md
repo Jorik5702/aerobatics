@@ -26,7 +26,23 @@ The current application shell provides a minimal LWJGL 3 window with an OpenGL 4
 ./mvnw exec:java
 ```
 
-The application opens a resizable `1280x720` window titled `FlightTrack` and clears the screen to cornflower blue.
+The application opens a resizable `1280x720` window. On macOS, the wrapper starts the LWJGL application with `-XstartOnFirstThread`.
+
+## Track loading menu
+
+Place Sensor Logger exports under `tracks/<track-name>/`, for example:
+
+```text
+tracks/2025-10-18_12-30-13/
+```
+
+At runtime:
+
+- `L` loads `tracks/2025-10-18_12-30-13` if present, otherwise the first available track directory.
+- `R` rescans the `tracks/` directory.
+- `Esc` closes the application.
+
+The current step loads and summarises CSV data only. 3D rendering of the flight path will be implemented later.
 
 ## Project structure
 
@@ -39,6 +55,8 @@ The application opens a resizable `1280x720` window titled `FlightTrack` and cle
 └── src
     ├── main
     │   ├── java/ch/flighttrack/FlightTrackApp.java
+    │   ├── java/ch/flighttrack/app/TrackMenuState.java
+    │   ├── java/ch/flighttrack/tracks/
     │   └── resources/application.properties
     └── test
         ├── java/ch/flighttrack/.gitkeep
