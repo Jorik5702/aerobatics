@@ -16,485 +16,267 @@ import java.util.Optional;
 import java.util.stream.Stream;
 
 public final class SensorLoggerTrackLoader {
-    private static final Path DEFAULT_TRACKS_DIRECTORY = Path.of("tracks");
-    private static final String PREFERRED_TRACK_DIRECTORY = "2025-10-18_12-30-13";
+    private static final Path TRACKS = Path.of("tracks");
+    private static final String DEFAULT_TRACK = "2025-10-18_12-30-13";
     private static final double EARTH_RADIUS_METERS = 6_378_137.0;
 
     public List<Path> discoverTracks() throws IOException {
-        return discoverTracks(DEFAULT_TRACKS_DIRECTORY);
-    }
-
-    public List<Path> discoverTracks(Path tracksDirectory) throws IOException {
-        if (!Files.isDirectory(tracksDirectory)) {
-            return List.of();
-        }
-
-        try (Stream<Path> entries = Files.list(tracksDirectory)) {
-            return entries.filter(Files::isDirectory).sorted().toList();
+        if (!Files.isDirectory(TRACKS)) return List.of();
+        try (Stream<Path> stream = Files.list(TRACKS)) {
+            return stream.filter(Files::isDirectory).sorted().toList();
         }
     }
 
     public Optional<Path> defaultTrackDirectory() throws IOException {
         List<Path> tracks = discoverTracks();
-        Optional<Path> preferredTrack = tracks.stream()
-                .filter(path -> PREFERRED_TRACK_DIRECTORY.equals(path.getFileName().toString()))
+        Optional<Path> preferred = tracks.stream()
+                .filter(path -> DEFAULT_TRACK.equals(path.getFileName().toString()))
                 .findFirst();
-
-        return preferredTrack.or(() -> tracks.stream().findFirst());
+        return preferred.isPresent() ? preferred : tracks.stream().findFirst();
     }
 
     public TrackSummary load(Path trackDirectory) throws IOException {
-        TrackFiles files = scanTrackFiles(trackDirectory);
-        return files.summary();
+        return scan(trackDirectory).summary();
     }
 
     public LoadedTrackData loadDetailedTrack(Path trackDirectory) throws IOException {
-        TrackFiles files = scanTrackFiles(trackDirectory);
-        Path locationFile = files.findCsv("Location.csv")
+        TrackFiles files = scan(trackDirectory);
+        Path locationFile = files.csv("Location.csv")
                 .orElseThrow(() -> new IOException("Location.csv not found in " + trackDirectory.toAbsolutePath()));
+        List<LocationSample> locations = readLocations(locationFile);
+        if (locations.isEmpty()) throw new IOException("Location.csv contains no usable location samples");
 
-        List<LocationSample> locations = readLocationSamples(locationFile);
-        if (locations.isEmpty()) {
-            throw new IOException("Location.csv contains no usable location samples");
-        }
+        List<BarometerSample> barometer = List.of();
+        Optional<Path> barometerFile = files.csv("Barometer.csv");
+        if (barometerFile.isPresent()) barometer = readBarometer(barometerFile.get());
 
-        List<BarometerSample> barometer = files.findCsv("Barometer.csv")
-                .map(path -> {
-                    try {
-                        return readBarometerSamples(path);
-                    } catch (IOException exception) {
-                        throw new TrackLoadRuntimeException(exception);
-                    }
-                })
-                .orElse(List.of());
-
-        GroundReference reference = detectGroundReference(locations, barometer);
-        List<TrackPoint> points = buildTrackPoints(locations, barometer, reference);
-        return new LoadedTrackData(files.summary(), reference, List.copyOf(points), files.summary().metadata());
+        GroundReference reference = reference(locations, barometer);
+        List<TrackPoint> points = points(locations, barometer, reference);
+        return new LoadedTrackData(files.summary(), reference, points, files.summary().metadata());
     }
 
-    private TrackFiles scanTrackFiles(Path trackDirectory) throws IOException {
-        if (!Files.isDirectory(trackDirectory)) {
-            throw new IOException("Track directory does not exist: " + trackDirectory.toAbsolutePath());
-        }
-
-        List<SensorFileSummary> sensorFiles = new ArrayList<>();
-        Optional<LocationSummary> locationSummary = Optional.empty();
+    private TrackFiles scan(Path dir) throws IOException {
+        if (!Files.isDirectory(dir)) throw new IOException("Track directory does not exist: " + dir.toAbsolutePath());
+        List<SensorFileSummary> summaries = new ArrayList<>();
+        Map<String, Path> csv = new HashMap<>();
         Map<String, String> metadata = Map.of();
-        Map<String, Path> csvByName = new HashMap<>();
-
-        try (Stream<Path> files = Files.list(trackDirectory)) {
-            List<Path> csvFiles = files
-                    .filter(Files::isRegularFile)
-                    .filter(path -> path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".csv"))
-                    .sorted()
-                    .toList();
-
-            for (Path csvFile : csvFiles) {
-                String fileName = csvFile.getFileName().toString();
-                csvByName.put(fileName.toLowerCase(Locale.ROOT), csvFile);
-                CsvSummary csvSummary = readCsvSummary(csvFile);
-                sensorFiles.add(new SensorFileSummary(csvFile, fileName, csvSummary.headers(), csvSummary.rows()));
-
-                if ("Location.csv".equalsIgnoreCase(fileName)) {
-                    locationSummary = summarizeLocation(csvFile, csvSummary.headers());
-                } else if ("metadata.csv".equalsIgnoreCase(fileName)) {
-                    metadata = readMetadata(csvFile);
-                }
+        Optional<LocationSummary> location = Optional.empty();
+        try (Stream<Path> stream = Files.list(dir)) {
+            for (Path file : stream.filter(Files::isRegularFile).filter(this::isCsv).sorted().toList()) {
+                CsvHead head = head(file);
+                String name = file.getFileName().toString();
+                csv.put(name.toLowerCase(Locale.ROOT), file);
+                summaries.add(new SensorFileSummary(file, name, head.headers(), head.rows()));
+                if ("Location.csv".equalsIgnoreCase(name)) location = summarizeLocation(file, head.headers());
+                if ("metadata.csv".equalsIgnoreCase(name)) metadata = metadata(file);
             }
         }
-
-        TrackSummary summary = new TrackSummary(trackDirectory, List.copyOf(sensorFiles), locationSummary, metadata);
-        return new TrackFiles(summary, Map.copyOf(csvByName));
+        return new TrackFiles(new TrackSummary(dir, summaries, location, metadata), csv);
     }
 
-    private List<LocationSample> readLocationSamples(Path locationFile) throws IOException {
-        try (BufferedReader reader = Files.newBufferedReader(locationFile, StandardCharsets.UTF_8)) {
-            String headerLine = reader.readLine();
-            if (headerLine == null) {
-                return List.of();
+    private boolean isCsv(Path path) {
+        return path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".csv");
+    }
+
+    private List<LocationSample> readLocations(Path file) throws IOException {
+        List<LocationSample> result = new ArrayList<>();
+        try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+            String header = reader.readLine();
+            if (header == null) return result;
+            Map<String, Integer> h = index(csv(header));
+            Integer time = first(h, "time", "timestamp");
+            Integer seconds = first(h, "seconds_elapsed", "seconds", "elapsed");
+            Integer lat = first(h, "latitude", "lat");
+            Integer lon = first(h, "longitude", "lng", "lon");
+            Integer alt = first(h, "altitude", "altitude_wgs84", "altitude_above_mean_sea_level");
+            Integer speed = first(h, "speed", "speed_meters_per_second", "horizontal_speed");
+            if (lat == null || lon == null) return result;
+            String line;
+            while ((line = reader.readLine()) != null) {
+                List<String> row = csv(line);
+                Optional<Double> latitude = dbl(row, lat);
+                Optional<Double> longitude = dbl(row, lon);
+                if (latitude.isEmpty() || longitude.isEmpty()) continue;
+                result.add(new LocationSample(
+                        time == null ? result.size() : lng(row, time).orElse((long) result.size()),
+                        seconds == null ? Double.NaN : dbl(row, seconds).orElse(Double.NaN),
+                        latitude.get(), longitude.get(),
+                        alt == null ? Double.NaN : dbl(row, alt).orElse(Double.NaN),
+                        speed == null ? Double.NaN : dbl(row, speed).orElse(Double.NaN)));
             }
-
-            List<String> headers = parseCsvLine(headerLine);
-            Map<String, Integer> columns = indexHeaders(headers);
-            Integer timeColumn = firstExistingColumn(columns, "time", "timestamp");
-            Integer secondsColumn = firstExistingColumn(columns, "seconds_elapsed", "seconds", "elapsed");
-            Integer latitudeColumn = firstExistingColumn(columns, "latitude", "lat");
-            Integer longitudeColumn = firstExistingColumn(columns, "longitude", "lng", "lon");
-            Integer altitudeColumn = firstExistingColumn(columns, "altitude", "altitude_wgs84", "altitude_above_mean_sea_level");
-            Integer speedColumn = firstExistingColumn(columns, "speed", "speed_meters_per_second", "horizontal_speed");
-
-            if (latitudeColumn == null || longitudeColumn == null) {
-                return List.of();
-            }
-
-            List<LocationSample> samples = new ArrayList<>();
-            String row;
-            while ((row = reader.readLine()) != null) {
-                List<String> values = parseCsvLine(row);
-                Optional<Double> latitude = readDouble(values, latitudeColumn);
-                Optional<Double> longitude = readDouble(values, longitudeColumn);
-                if (latitude.isEmpty() || longitude.isEmpty()) {
-                    continue;
-                }
-
-                long timeNanos = timeColumn == null ? samples.size() : readLong(values, timeColumn).orElse(samples.size());
-                double secondsElapsed = secondsColumn == null ? Double.NaN : readDouble(values, secondsColumn).orElse(Double.NaN);
-                double altitude = altitudeColumn == null ? Double.NaN : readDouble(values, altitudeColumn).orElse(Double.NaN);
-                double speed = speedColumn == null ? Double.NaN : readDouble(values, speedColumn).orElse(Double.NaN);
-
-                samples.add(new LocationSample(timeNanos, secondsElapsed, latitude.get(), longitude.get(), altitude, speed));
-            }
-
-            samples.sort(Comparator.comparingLong(LocationSample::timeNanos));
-            return samples;
         }
+        result.sort(Comparator.comparingLong(LocationSample::timeNanos));
+        return result;
     }
 
-    private List<BarometerSample> readBarometerSamples(Path barometerFile) throws IOException {
-        try (BufferedReader reader = Files.newBufferedReader(barometerFile, StandardCharsets.UTF_8)) {
-            String headerLine = reader.readLine();
-            if (headerLine == null) {
-                return List.of();
+    private List<BarometerSample> readBarometer(Path file) throws IOException {
+        List<BarometerSample> result = new ArrayList<>();
+        try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+            String header = reader.readLine();
+            if (header == null) return result;
+            Map<String, Integer> h = index(csv(header));
+            Integer time = first(h, "time", "timestamp");
+            Integer altitude = first(h, "relative_altitude", "altitude", "barometric_altitude", "altitude_meters");
+            if (altitude == null) return result;
+            String line;
+            while ((line = reader.readLine()) != null) {
+                List<String> row = csv(line);
+                Optional<Double> value = dbl(row, altitude);
+                if (value.isEmpty()) continue;
+                result.add(new BarometerSample(time == null ? result.size() : lng(row, time).orElse((long) result.size()), value.get()));
             }
-
-            List<String> headers = parseCsvLine(headerLine);
-            Map<String, Integer> columns = indexHeaders(headers);
-            Integer timeColumn = firstExistingColumn(columns, "time", "timestamp");
-            Integer secondsColumn = firstExistingColumn(columns, "seconds_elapsed", "seconds", "elapsed");
-            Integer altitudeColumn = firstExistingColumn(columns,
-                    "relative_altitude", "altitude", "barometric_altitude", "altitude_meters");
-            Integer pressureColumn = firstExistingColumn(columns, "pressure", "pressure_kpa", "pressure_hpa");
-
-            if (altitudeColumn == null) {
-                return List.of();
-            }
-
-            List<BarometerSample> samples = new ArrayList<>();
-            String row;
-            while ((row = reader.readLine()) != null) {
-                List<String> values = parseCsvLine(row);
-                Optional<Double> altitude = readDouble(values, altitudeColumn);
-                if (altitude.isEmpty()) {
-                    continue;
-                }
-
-                long timeNanos = timeColumn == null ? samples.size() : readLong(values, timeColumn).orElse(samples.size());
-                double secondsElapsed = secondsColumn == null ? Double.NaN : readDouble(values, secondsColumn).orElse(Double.NaN);
-                double pressure = pressureColumn == null ? Double.NaN : readDouble(values, pressureColumn).orElse(Double.NaN);
-                samples.add(new BarometerSample(timeNanos, secondsElapsed, altitude.get(), pressure));
-            }
-
-            samples.sort(Comparator.comparingLong(BarometerSample::timeNanos));
-            return samples;
         }
+        result.sort(Comparator.comparingLong(BarometerSample::timeNanos));
+        return result;
     }
 
-    private GroundReference detectGroundReference(List<LocationSample> locations, List<BarometerSample> barometer) {
-        int maxSamples = Math.min(locations.size(), 300);
-        double sumLatitude = 0.0;
-        double sumLongitude = 0.0;
-        double sumBarometricAltitude = 0.0;
-        double minBarometricAltitude = Double.POSITIVE_INFINITY;
-        double maxBarometricAltitude = Double.NEGATIVE_INFINITY;
+    private GroundReference reference(List<LocationSample> locations, List<BarometerSample> barometer) {
         int count = 0;
-
-        for (int i = 0; i < maxSamples; i++) {
-            LocationSample location = locations.get(i);
-            double barometricAltitude = altitudeFor(location, barometer);
-            if (Double.isNaN(barometricAltitude)) {
-                continue;
-            }
-
-            double speed = Double.isNaN(location.speedMetersPerSecond()) ? 0.0 : location.speedMetersPerSecond();
-            minBarometricAltitude = Math.min(minBarometricAltitude, barometricAltitude);
-            maxBarometricAltitude = Math.max(maxBarometricAltitude, barometricAltitude);
-
+        double lat = 0.0, lon = 0.0, alt = 0.0, minAlt = Double.POSITIVE_INFINITY, maxAlt = Double.NEGATIVE_INFINITY;
+        int limit = Math.min(locations.size(), 300);
+        for (int i = 0; i < limit; i++) {
+            LocationSample sample = locations.get(i);
+            double baro = altitude(sample, barometer);
+            if (Double.isNaN(baro)) continue;
+            minAlt = Math.min(minAlt, baro);
+            maxAlt = Math.max(maxAlt, baro);
+            double speed = Double.isNaN(sample.speedMetersPerSecond()) ? 0.0 : sample.speedMetersPerSecond();
             if (speed <= 1.0) {
-                sumLatitude += location.latitude();
-                sumLongitude += location.longitude();
-                sumBarometricAltitude += barometricAltitude;
-                count++;
+                lat += sample.latitude(); lon += sample.longitude(); alt += baro; count++;
             }
         }
-
-        if (count == 0 || maxBarometricAltitude - minBarometricAltitude > 2.0) {
-            LocationSample first = locations.getFirst();
-            return new GroundReference(first.latitude(), first.longitude(), altitudeFor(first, barometer));
+        if (count == 0 || maxAlt - minAlt > 2.0) {
+            LocationSample first = locations.get(0);
+            return new GroundReference(first.latitude(), first.longitude(), altitude(first, barometer));
         }
-
-        return new GroundReference(sumLatitude / count, sumLongitude / count, sumBarometricAltitude / count);
+        return new GroundReference(lat / count, lon / count, alt / count);
     }
 
-    private List<TrackPoint> buildTrackPoints(List<LocationSample> locations, List<BarometerSample> barometer, GroundReference reference) {
-        List<TrackPoint> points = new ArrayList<>(locations.size());
-        for (LocationSample location : locations) {
-            double barometricAltitude = altitudeFor(location, barometer);
-            double dLat = Math.toRadians(location.latitude() - reference.latitude());
-            double dLon = Math.toRadians(location.longitude() - reference.longitude());
-            double xEast = dLon * EARTH_RADIUS_METERS * Math.cos(Math.toRadians(reference.latitude()));
-            double yNorth = dLat * EARTH_RADIUS_METERS;
-            double zUp = barometricAltitude - reference.barometricAltitudeMeters();
-            double horizontalDistance = Math.hypot(xEast, yNorth);
-            boolean moving = Math.abs(zUp) > 1.0
-                    || horizontalDistance > 5.0
-                    || (!Double.isNaN(location.speedMetersPerSecond()) && location.speedMetersPerSecond() > 1.5);
-
-            points.add(new TrackPoint(
-                    location.timeNanos(),
-                    location.secondsElapsed(),
-                    location.latitude(),
-                    location.longitude(),
-                    location.gpsAltitudeMeters(),
-                    barometricAltitude,
-                    location.speedMetersPerSecond(),
-                    xEast,
-                    yNorth,
-                    zUp,
-                    moving));
+    private List<TrackPoint> points(List<LocationSample> locations, List<BarometerSample> barometer, GroundReference ref) {
+        List<TrackPoint> result = new ArrayList<>();
+        for (LocationSample loc : locations) {
+            double baro = altitude(loc, barometer);
+            double x = Math.toRadians(loc.longitude() - ref.longitude()) * EARTH_RADIUS_METERS * Math.cos(Math.toRadians(ref.latitude()));
+            double y = Math.toRadians(loc.latitude() - ref.latitude()) * EARTH_RADIUS_METERS;
+            double z = baro - ref.barometricAltitudeMeters();
+            boolean moving = Math.abs(z) > 1.0 || Math.hypot(x, y) > 5.0 || (!Double.isNaN(loc.speedMetersPerSecond()) && loc.speedMetersPerSecond() > 1.5);
+            result.add(new TrackPoint(loc.timeNanos(), loc.secondsElapsed(), loc.latitude(), loc.longitude(), loc.gpsAltitudeMeters(), baro, loc.speedMetersPerSecond(), x, y, z, moving));
         }
-        return points;
+        return List.copyOf(result);
     }
 
-    private double altitudeFor(LocationSample location, List<BarometerSample> barometer) {
-        if (barometer.isEmpty()) {
-            return location.gpsAltitudeMeters();
-        }
-
-        BarometerSample nearest = nearestBarometer(location.timeNanos(), barometer);
-        if (nearest == null || Double.isNaN(nearest.altitudeMeters())) {
-            return location.gpsAltitudeMeters();
-        }
-        return nearest.altitudeMeters();
+    private double altitude(LocationSample sample, List<BarometerSample> barometer) {
+        if (barometer.isEmpty()) return sample.gpsAltitudeMeters();
+        BarometerSample nearest = nearest(sample.timeNanos(), barometer);
+        return nearest == null ? sample.gpsAltitudeMeters() : nearest.altitudeMeters();
     }
 
-    private BarometerSample nearestBarometer(long timeNanos, List<BarometerSample> barometer) {
-        if (barometer.isEmpty()) {
-            return null;
+    private BarometerSample nearest(long time, List<BarometerSample> samples) {
+        BarometerSample best = null;
+        long bestDiff = Long.MAX_VALUE;
+        for (BarometerSample sample : samples) {
+            long diff = Math.abs(sample.timeNanos() - time);
+            if (diff < bestDiff) { best = sample; bestDiff = diff; }
         }
-
-        int low = 0;
-        int high = barometer.size() - 1;
-        while (low <= high) {
-            int mid = (low + high) >>> 1;
-            long candidate = barometer.get(mid).timeNanos();
-            if (candidate < timeNanos) {
-                low = mid + 1;
-            } else if (candidate > timeNanos) {
-                high = mid - 1;
-            } else {
-                return barometer.get(mid);
-            }
-        }
-
-        if (low <= 0) {
-            return barometer.getFirst();
-        }
-        if (low >= barometer.size()) {
-            return barometer.getLast();
-        }
-
-        BarometerSample before = barometer.get(low - 1);
-        BarometerSample after = barometer.get(low);
-        return Math.abs(before.timeNanos() - timeNanos) <= Math.abs(after.timeNanos() - timeNanos) ? before : after;
+        return best;
     }
 
-    private CsvSummary readCsvSummary(Path csvFile) throws IOException {
-        try (BufferedReader reader = Files.newBufferedReader(csvFile, StandardCharsets.UTF_8)) {
-            String headerLine = reader.readLine();
-            if (headerLine == null) {
-                return new CsvSummary(List.of(), 0);
-            }
-
+    private CsvHead head(Path file) throws IOException {
+        try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+            String header = reader.readLine();
+            if (header == null) return new CsvHead(List.of(), 0);
             int rows = 0;
-            while (reader.readLine() != null) {
-                rows++;
-            }
-
-            return new CsvSummary(parseCsvLine(headerLine), rows);
+            while (reader.readLine() != null) rows++;
+            return new CsvHead(csv(header), rows);
         }
     }
 
-    private Map<String, String> readMetadata(Path metadataFile) throws IOException {
-        Map<String, String> metadata = new LinkedHashMap<>();
-        try (BufferedReader reader = Files.newBufferedReader(metadataFile, StandardCharsets.UTF_8)) {
-            String headerLine = reader.readLine();
-            if (headerLine == null) {
-                return metadata;
-            }
-
-            List<String> headers = parseCsvLine(headerLine);
-            String row;
-            while ((row = reader.readLine()) != null) {
-                List<String> values = parseCsvLine(row);
-                if (headers.size() >= 2 && values.size() >= 2) {
-                    metadata.put(values.get(0), values.get(1));
-                } else if (!values.isEmpty()) {
-                    metadata.put("row-" + metadata.size(), String.join(", ", values));
-                }
+    private Map<String, String> metadata(Path file) throws IOException {
+        Map<String, String> result = new LinkedHashMap<>();
+        try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+            String header = reader.readLine();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                List<String> row = csv(line);
+                if (row.size() >= 2) result.put(row.get(0), row.get(1));
             }
         }
-        return metadata;
+        return result;
     }
 
-    private Optional<LocationSummary> summarizeLocation(Path locationFile, List<String> headers) throws IOException {
-        Map<String, Integer> columnIndex = indexHeaders(headers);
-        Integer latitudeColumn = firstExistingColumn(columnIndex, "latitude", "lat");
-        Integer longitudeColumn = firstExistingColumn(columnIndex, "longitude", "lng", "lon");
-        Integer altitudeColumn = firstExistingColumn(columnIndex, "altitude", "altitude_wgs84", "altitude_above_mean_sea_level");
-
-        if (latitudeColumn == null || longitudeColumn == null) {
-            return Optional.empty();
-        }
-
-        int samples = 0;
-        double minLatitude = Double.POSITIVE_INFINITY;
-        double maxLatitude = Double.NEGATIVE_INFINITY;
-        double minLongitude = Double.POSITIVE_INFINITY;
-        double maxLongitude = Double.NEGATIVE_INFINITY;
-        double minAltitude = Double.POSITIVE_INFINITY;
-        double maxAltitude = Double.NEGATIVE_INFINITY;
-
-        try (BufferedReader reader = Files.newBufferedReader(locationFile, StandardCharsets.UTF_8)) {
+    private Optional<LocationSummary> summarizeLocation(Path file, List<String> headers) throws IOException {
+        Map<String, Integer> h = index(headers);
+        Integer lat = first(h, "latitude", "lat");
+        Integer lon = first(h, "longitude", "lng", "lon");
+        Integer alt = first(h, "altitude", "altitude_wgs84", "altitude_above_mean_sea_level");
+        if (lat == null || lon == null) return Optional.empty();
+        int n = 0;
+        double minLat = Double.POSITIVE_INFINITY, maxLat = Double.NEGATIVE_INFINITY;
+        double minLon = Double.POSITIVE_INFINITY, maxLon = Double.NEGATIVE_INFINITY;
+        double minAlt = Double.POSITIVE_INFINITY, maxAlt = Double.NEGATIVE_INFINITY;
+        try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
             reader.readLine();
-            String row;
-            while ((row = reader.readLine()) != null) {
-                List<String> values = parseCsvLine(row);
-                Optional<Double> latitude = readDouble(values, latitudeColumn);
-                Optional<Double> longitude = readDouble(values, longitudeColumn);
-                if (latitude.isEmpty() || longitude.isEmpty()) {
-                    continue;
-                }
-
-                samples++;
-                minLatitude = Math.min(minLatitude, latitude.get());
-                maxLatitude = Math.max(maxLatitude, latitude.get());
-                minLongitude = Math.min(minLongitude, longitude.get());
-                maxLongitude = Math.max(maxLongitude, longitude.get());
-
-                if (altitudeColumn != null) {
-                    Optional<Double> altitude = readDouble(values, altitudeColumn);
-                    if (altitude.isPresent()) {
-                        minAltitude = Math.min(minAltitude, altitude.get());
-                        maxAltitude = Math.max(maxAltitude, altitude.get());
-                    }
+            String line;
+            while ((line = reader.readLine()) != null) {
+                List<String> row = csv(line);
+                Optional<Double> la = dbl(row, lat), lo = dbl(row, lon);
+                if (la.isEmpty() || lo.isEmpty()) continue;
+                n++;
+                minLat = Math.min(minLat, la.get()); maxLat = Math.max(maxLat, la.get());
+                minLon = Math.min(minLon, lo.get()); maxLon = Math.max(maxLon, lo.get());
+                if (alt != null) {
+                    Optional<Double> a = dbl(row, alt);
+                    if (a.isPresent()) { minAlt = Math.min(minAlt, a.get()); maxAlt = Math.max(maxAlt, a.get()); }
                 }
             }
         }
-
-        if (samples == 0) {
-            return Optional.empty();
-        }
-
-        if (Double.isInfinite(minAltitude)) {
-            minAltitude = Double.NaN;
-            maxAltitude = Double.NaN;
-        }
-
-        return Optional.of(new LocationSummary(samples, minLatitude, maxLatitude, minLongitude, maxLongitude, minAltitude, maxAltitude));
+        if (n == 0) return Optional.empty();
+        if (Double.isInfinite(minAlt)) { minAlt = Double.NaN; maxAlt = Double.NaN; }
+        return Optional.of(new LocationSummary(n, minLat, maxLat, minLon, maxLon, minAlt, maxAlt));
     }
 
-    private Map<String, Integer> indexHeaders(List<String> headers) {
-        Map<String, Integer> index = new HashMap<>();
-        for (int i = 0; i < headers.size(); i++) {
-            index.put(headers.get(i).trim().toLowerCase(Locale.ROOT), i);
-        }
-        return index;
+    private Map<String, Integer> index(List<String> headers) {
+        Map<String, Integer> result = new HashMap<>();
+        for (int i = 0; i < headers.size(); i++) result.put(headers.get(i).trim().toLowerCase(Locale.ROOT), i);
+        return result;
     }
 
-    private Integer firstExistingColumn(Map<String, Integer> columnIndex, String... names) {
+    private Integer first(Map<String, Integer> index, String... names) {
         for (String name : names) {
-            Integer index = columnIndex.get(name.toLowerCase(Locale.ROOT));
-            if (index != null) {
-                return index;
-            }
+            Integer value = index.get(name.toLowerCase(Locale.ROOT));
+            if (value != null) return value;
         }
         return null;
     }
 
-    private Optional<Double> readDouble(List<String> values, int columnIndex) {
-        if (columnIndex < 0 || columnIndex >= values.size()) {
-            return Optional.empty();
-        }
-
-        String value = values.get(columnIndex).trim();
-        if (value.isEmpty()) {
-            return Optional.empty();
-        }
-
-        try {
-            return Optional.of(Double.parseDouble(value));
-        } catch (NumberFormatException ignored) {
-            return Optional.empty();
-        }
+    private Optional<Double> dbl(List<String> row, int index) {
+        if (index < 0 || index >= row.size() || row.get(index).isBlank()) return Optional.empty();
+        try { return Optional.of(Double.parseDouble(row.get(index).trim())); } catch (NumberFormatException e) { return Optional.empty(); }
     }
 
-    private Optional<Long> readLong(List<String> values, int columnIndex) {
-        if (columnIndex < 0 || columnIndex >= values.size()) {
-            return Optional.empty();
-        }
-
-        String value = values.get(columnIndex).trim();
-        if (value.isEmpty()) {
-            return Optional.empty();
-        }
-
-        try {
-            return Optional.of(Long.parseLong(value));
-        } catch (NumberFormatException ignored) {
-            try {
-                return Optional.of((long) Double.parseDouble(value));
-            } catch (NumberFormatException ignoredAgain) {
-                return Optional.empty();
-            }
-        }
+    private Optional<Long> lng(List<String> row, int index) {
+        if (index < 0 || index >= row.size() || row.get(index).isBlank()) return Optional.empty();
+        try { return Optional.of(Long.parseLong(row.get(index).trim())); } catch (NumberFormatException e) { return Optional.empty(); }
     }
 
-    private List<String> parseCsvLine(String line) {
-        List<String> values = new ArrayList<>();
+    private List<String> csv(String line) {
+        List<String> result = new ArrayList<>();
         StringBuilder current = new StringBuilder();
         boolean quoted = false;
-
         for (int i = 0; i < line.length(); i++) {
             char c = line.charAt(i);
-            if (c == '"') {
-                if (quoted && i + 1 < line.length() && line.charAt(i + 1) == '"') {
-                    current.append('"');
-                    i++;
-                } else {
-                    quoted = !quoted;
-                }
-            } else if (c == ',' && !quoted) {
-                values.add(current.toString());
-                current.setLength(0);
-            } else {
-                current.append(c);
-            }
+            if (c == '"') quoted = !quoted;
+            else if (c == ',' && !quoted) { result.add(current.toString()); current.setLength(0); }
+            else current.append(c);
         }
-
-        values.add(current.toString());
-        return values;
+        result.add(current.toString());
+        return result;
     }
 
-    private record CsvSummary(List<String> headers, int rows) {
+    private record CsvHead(List<String> headers, int rows) {}
+    private record TrackFiles(TrackSummary summary, Map<String, Path> files) {
+        Optional<Path> csv(String name) { return Optional.ofNullable(files.get(name.toLowerCase(Locale.ROOT))); }
     }
-
-    private record TrackFiles(TrackSummary summary, Map<String, Path> csvByName) {
-        Optional<Path> findCsv(String name) {
-            return Optional.ofNullable(csvByName.get(name.toLowerCase(Locale.ROOT)));
-        }
-    }
-
-    private record LocationSample(long timeNanos, double secondsElapsed, double latitude, double longitude,
-                                  double gpsAltitudeMeters, double speedMetersPerSecond) {
-    }
-
-    private record BarometerSample(long timeNanos, double secondsElapsed, double altitudeMeters, double pressure) {
-    }
-
-    private static final class TrackLoadRuntimeException extends RuntimeException {
-        private TrackLoadRuntimeException(IOException cause) {
-            super(cause);
-        }
-    }
+    private record LocationSample(long timeNanos, double secondsElapsed, double latitude, double longitude, double gpsAltitudeMeters, double speedMetersPerSecond) {}
+    private record BarometerSample(long timeNanos, double altitudeMeters) {}
 }
