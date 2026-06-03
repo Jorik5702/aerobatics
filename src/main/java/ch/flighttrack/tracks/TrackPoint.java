@@ -17,7 +17,9 @@ public record TrackPoint(
         double rollRadians,
         double accelerationForwardMetersPerSecondSquared,
         double accelerationRightMetersPerSecondSquared,
-        double accelerationUpMetersPerSecondSquared
+        double accelerationUpMetersPerSecondSquared,
+        double barometricClimbRateMetersPerSecond,
+        double barometricVerticalAccelerationMetersPerSecondSquared
 ) {
     public TrackPoint(
             long timeNanos,
@@ -34,7 +36,7 @@ public record TrackPoint(
     ) {
         this(timeNanos, secondsElapsed, latitude, longitude, gpsAltitudeMeters, barometricAltitudeMeters,
                 speedMetersPerSecond, xMeters, yMeters, zMeters, moving,
-                Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN);
+                Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN);
     }
 
     public TrackPoint(
@@ -53,7 +55,7 @@ public record TrackPoint(
     ) {
         this(timeNanos, secondsElapsed, latitude, longitude, gpsAltitudeMeters, barometricAltitudeMeters,
                 speedMetersPerSecond, xMeters, yMeters, zMeters, moving,
-                headingRadians, Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN);
+                headingRadians, Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN);
     }
 
     public TrackPoint(
@@ -73,7 +75,7 @@ public record TrackPoint(
     ) {
         this(timeNanos, secondsElapsed, latitude, longitude, gpsAltitudeMeters, barometricAltitudeMeters,
                 speedMetersPerSecond, xMeters, yMeters, zMeters, moving,
-                headingRadians, pitchRadians, Double.NaN, Double.NaN, Double.NaN, Double.NaN);
+                headingRadians, pitchRadians, Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN);
     }
 
     public TrackPoint(
@@ -94,6 +96,6 @@ public record TrackPoint(
     ) {
         this(timeNanos, secondsElapsed, latitude, longitude, gpsAltitudeMeters, barometricAltitudeMeters,
                 speedMetersPerSecond, xMeters, yMeters, zMeters, moving,
-                headingRadians, pitchRadians, rollRadians, Double.NaN, Double.NaN, Double.NaN);
+                headingRadians, pitchRadians, rollRadians, Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN);
     }
 }
