@@ -68,6 +68,9 @@ public final class TrackRenderer {
     private float centerX;
     private float centerZ;
     private float modelRadius = 2.0f;
+    private float lastHeading;
+    private float lastPitch;
+    private float lastRoll;
 
     public void init() {
         glEnable(GL_DEPTH_TEST);
@@ -87,7 +90,7 @@ public final class TrackRenderer {
         uploadAxes();
         uploadGround(2.2f);
         uploadOrigin();
-        uploadPlane(0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+        uploadPlane(0.0f, 0.0f, 0.0f, lastHeading, lastPitch, lastRoll);
     }
 
     public float modelRadius() {
@@ -121,22 +124,15 @@ public final class TrackRenderer {
         if (points.isEmpty()) return;
         int index = Math.max(0, Math.min(currentIndex, points.size() - 1));
         TrackPoint current = points.get(index);
-        TrackPoint next = points.get(Math.min(index + 1, points.size() - 1));
-        TrackPoint previous = points.get(Math.max(index - 1, 0));
         float x = transformX(current);
         float y = transformY(current);
         float z = transformZ(current);
-        float dx = transformX(next) - transformX(previous);
-        float dy = transformY(next) - transformY(previous);
-        float dz = transformZ(next) - transformZ(previous);
-        float heading = Double.isNaN(current.headingRadians())
-                ? (float) Math.atan2(dx, -dz)
-                : (float) current.headingRadians();
-        float pitch = Double.isNaN(current.pitchRadians())
-                ? (float) Math.atan2(dy, Math.max(0.0001f, (float) Math.hypot(dx, dz)))
-                : (float) current.pitchRadians();
-        float roll = Double.isNaN(current.rollRadians()) ? 0.0f : (float) current.rollRadians();
-        uploadPlane(x, y, z, heading, pitch, roll);
+
+        if (!Double.isNaN(current.headingRadians())) lastHeading = (float) current.headingRadians();
+        if (!Double.isNaN(current.pitchRadians())) lastPitch = (float) current.pitchRadians();
+        if (!Double.isNaN(current.rollRadians())) lastRoll = (float) current.rollRadians();
+
+        uploadPlane(x, y, z, lastHeading, lastPitch, lastRoll);
     }
 
     public void render(int width, int height, float yaw, float pitch, float distance, float panX, float panY, int currentIndex) {
