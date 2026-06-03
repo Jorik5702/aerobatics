@@ -31,13 +31,14 @@ final class TelemetryFusionEngine {
         VectorDiagnostic magneticDiagnostic = diagnoseVector("magnetometer", magnetometer, startTime);
         VectorDiagnostic uncalibratedAccelDiagnostic = diagnoseVector("accelerometer uncalibrated", accelerometerUncalibrated, startTime);
         GroundReference reference = lowestReference(locations, barometer, accelerometer, gravity, orientation, startTime);
-        List<TrackPoint> points = fusedPoints(locations, barometer, accelerometer, gravity, orientation, reference, startTime);
+        List<TrackPoint> points = fusedPoints(locations, barometer, accelerometer, gravity, orientation, reference, startTime, bias);
         if (points.isEmpty()) throw new IOException("No usable fused telemetry points found");
 
         System.out.printf("Telemetry fusion: locations=%d, barometer=%d, accelerometer=%d, accelUncalibrated=%d, gravity=%d, magnetometer=%d, magnetometerUncalibrated=%d, orientation=%d, fusedPoints=%d%n",
                 locations.size(), barometer.size(), accelerometer.size(), accelerometerUncalibrated.size(), gravity.size(), magnetometer.size(), magnetometerUncalibrated.size(), orientation.size(), points.size());
         System.out.println("Telemetry fusion mode: conservative multi-rate timeline; GPS is horizontal truth, barometer is vertical truth.");
         System.out.println("Plane symbol attitude uses the selected orientation mount and carries the last valid quaternion attitude forward.");
+        System.out.println("Aircraft-axis acceleration diagnostics use calibrated Accelerometer.csv with initial bias removed.");
         System.out.printf("Phone mount diagnostic: %s%n", mount.description());
         System.out.printf("Orientation diagnostic: %s%n", orientationDiagnostic.description());
         System.out.printf("Attitude/GPS course diagnostic: %s%n", attitudeDiagnostic);
@@ -63,10 +64,11 @@ final class TelemetryFusionEngine {
     private List<TrackPoint> fusedPoints(List<RawLocation> locations, List<RawBarometer> barometer,
                                          List<RawVector> accelerometer, List<RawVector> gravity,
                                          List<RawOrientation> orientation,
-                                         GroundReference reference, long startTime) {
+                                         GroundReference reference, long startTime, AccelBias bias) {
         java.util.ArrayList<TrackPoint> result = new java.util.ArrayList<>();
         MergedCursor cursor = new MergedCursor(locations, barometer, accelerometer, gravity, orientation, startTime);
         AttitudeState attitude = initialAttitude(orientation, startTime);
+        AccelerationState acceleration = new AccelerationState(Double.NaN, Double.NaN, Double.NaN);
         long firstTime = -1L;
         MergedSample sample;
         while ((sample = cursor.next()) != null) {
@@ -77,11 +79,13 @@ final class TelemetryFusionEngine {
             double z = sample.baroAltitude() - reference.barometricAltitudeMeters();
             double seconds = (sample.timeNanos() - firstTime) / 1_000_000_000.0;
             attitude = attitude.withLatest(sample.orientation());
+            acceleration = acceleration.withLatest(sample.accelerometer(), bias);
             boolean moving = Math.abs(z) > 1.0 || Math.hypot(x, y) > 5.0
                     || (!Double.isNaN(location.speedMetersPerSecond()) && location.speedMetersPerSecond() > 1.5);
             result.add(new TrackPoint(sample.timeNanos(), seconds, location.latitude(), location.longitude(),
                     location.gpsAltitudeMeters(), sample.baroAltitude(), location.speedMetersPerSecond(), x, y, z,
-                    moving, attitude.heading(), attitude.pitch(), attitude.roll()));
+                    moving, attitude.heading(), attitude.pitch(), attitude.roll(),
+                    acceleration.forward(), acceleration.right(), acceleration.up()));
         }
         return List.copyOf(result);
     }
@@ -232,6 +236,19 @@ final class TelemetryFusionEngine {
                     Double.isNaN(nextPitch) ? pitch : nextPitch,
                     Double.isNaN(nextRoll) ? roll : nextRoll
             );
+        }
+    }
+
+    private record AccelerationState(double forward, double right, double up) {
+        AccelerationState withLatest(RawVector acceleration, AccelBias bias) {
+            if (acceleration == null) return this;
+            double ax = acceleration.x() - bias.x();
+            double ay = acceleration.y() - bias.y();
+            double az = acceleration.z() - bias.z();
+            double forward = ax * PhoneMount.FORWARD_X + ay * PhoneMount.FORWARD_Y + az * PhoneMount.FORWARD_Z;
+            double right = ax * PhoneMount.RIGHT_X + ay * PhoneMount.RIGHT_Y + az * PhoneMount.RIGHT_Z;
+            double up = ax * PhoneMount.UP_X + ay * PhoneMount.UP_Y + az * PhoneMount.UP_Z;
+            return new AccelerationState(forward, right, up);
         }
     }
 
