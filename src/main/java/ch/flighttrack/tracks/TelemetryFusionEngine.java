@@ -39,6 +39,7 @@ final class TelemetryFusionEngine {
         System.out.println("Telemetry fusion mode: conservative multi-rate timeline; GPS is horizontal truth, barometer is vertical truth.");
         System.out.println("Plane symbol attitude uses the selected orientation mount and carries the last valid quaternion attitude forward.");
         System.out.println("Aircraft-axis acceleration diagnostics use calibrated Accelerometer.csv with initial bias removed.");
+        System.out.println("Barometric climb-rate diagnostics are derived only from new Barometer.csv samples and carried forward between samples.");
         System.out.printf("Phone mount diagnostic: %s%n", mount.description());
         System.out.printf("Orientation diagnostic: %s%n", orientationDiagnostic.description());
         System.out.printf("Attitude/GPS course diagnostic: %s%n", attitudeDiagnostic);
@@ -69,6 +70,7 @@ final class TelemetryFusionEngine {
         MergedCursor cursor = new MergedCursor(locations, barometer, accelerometer, gravity, orientation, startTime);
         AttitudeState attitude = initialAttitude(orientation, startTime);
         AccelerationState acceleration = new AccelerationState(Double.NaN, Double.NaN, Double.NaN);
+        BarometricDerivativeState baroDerivative = new BarometricDerivativeState(0L, Double.NaN, Double.NaN, Double.NaN);
         long firstTime = -1L;
         MergedSample sample;
         while ((sample = cursor.next()) != null) {
@@ -80,12 +82,14 @@ final class TelemetryFusionEngine {
             double seconds = (sample.timeNanos() - firstTime) / 1_000_000_000.0;
             attitude = attitude.withLatest(sample.orientation());
             acceleration = acceleration.withLatest(sample.accelerometer(), bias);
+            baroDerivative = baroDerivative.withLatest(sample.barometerTimeNanos(), sample.baroAltitude(), sample.barometerUpdated());
             boolean moving = Math.abs(z) > 1.0 || Math.hypot(x, y) > 5.0
                     || (!Double.isNaN(location.speedMetersPerSecond()) && location.speedMetersPerSecond() > 1.5);
             result.add(new TrackPoint(sample.timeNanos(), seconds, location.latitude(), location.longitude(),
                     location.gpsAltitudeMeters(), sample.baroAltitude(), location.speedMetersPerSecond(), x, y, z,
                     moving, attitude.heading(), attitude.pitch(), attitude.roll(),
-                    acceleration.forward(), acceleration.right(), acceleration.up()));
+                    acceleration.forward(), acceleration.right(), acceleration.up(),
+                    baroDerivative.climbRate(), baroDerivative.verticalAcceleration()));
         }
         return List.copyOf(result);
     }
@@ -210,17 +214,18 @@ final class TelemetryFusionEngine {
                     || accelerometerIndex < accelerometer.size() || gravityIndex < gravity.size()
                     || orientationIndex < orientation.size()) {
                 long next = Long.MAX_VALUE;
+                boolean barometerUpdated = false;
                 if (locationIndex < locations.size()) next = Math.min(next, locations.get(locationIndex).timeNanos());
                 if (barometerIndex < barometer.size()) next = Math.min(next, barometer.get(barometerIndex).timeNanos());
                 if (accelerometerIndex < accelerometer.size()) next = Math.min(next, accelerometer.get(accelerometerIndex).timeNanos());
                 if (gravityIndex < gravity.size()) next = Math.min(next, gravity.get(gravityIndex).timeNanos());
                 if (orientationIndex < orientation.size()) next = Math.min(next, orientation.get(orientationIndex).timeNanos());
                 while (locationIndex < locations.size() && locations.get(locationIndex).timeNanos() == next) lastLocation = locations.get(locationIndex++);
-                while (barometerIndex < barometer.size() && barometer.get(barometerIndex).timeNanos() == next) lastBarometer = barometer.get(barometerIndex++);
+                while (barometerIndex < barometer.size() && barometer.get(barometerIndex).timeNanos() == next) { lastBarometer = barometer.get(barometerIndex++); barometerUpdated = true; }
                 while (accelerometerIndex < accelerometer.size() && accelerometer.get(accelerometerIndex).timeNanos() == next) lastAccelerometer = accelerometer.get(accelerometerIndex++);
                 while (gravityIndex < gravity.size() && gravity.get(gravityIndex).timeNanos() == next) lastGravity = gravity.get(gravityIndex++);
                 while (orientationIndex < orientation.size() && orientation.get(orientationIndex).timeNanos() == next) lastOrientation = orientation.get(orientationIndex++);
-                if (lastLocation != null && lastBarometer != null) return new MergedSample(next, lastLocation, lastBarometer.altitudeMeters(), lastAccelerometer, lastGravity, lastOrientation);
+                if (lastLocation != null && lastBarometer != null) return new MergedSample(next, lastLocation, lastBarometer.timeNanos(), lastBarometer.altitudeMeters(), lastAccelerometer, lastGravity, lastOrientation, barometerUpdated);
             }
             return null;
         }
@@ -252,9 +257,23 @@ final class TelemetryFusionEngine {
         }
     }
 
+    private record BarometricDerivativeState(long previousTimeNanos, double previousAltitude, double climbRate, double verticalAcceleration) {
+        BarometricDerivativeState withLatest(long timeNanos, double altitude, boolean updated) {
+            if (!updated) return this;
+            if (previousTimeNanos <= 0L || Double.isNaN(previousAltitude)) {
+                return new BarometricDerivativeState(timeNanos, altitude, Double.NaN, Double.NaN);
+            }
+            double dt = (timeNanos - previousTimeNanos) / 1_000_000_000.0;
+            if (dt <= 0.0) return this;
+            double nextClimbRate = (altitude - previousAltitude) / dt;
+            double nextVerticalAcceleration = Double.isNaN(climbRate) ? Double.NaN : (nextClimbRate - climbRate) / dt;
+            return new BarometricDerivativeState(timeNanos, altitude, nextClimbRate, nextVerticalAcceleration);
+        }
+    }
+
     private record AccelBias(double x, double y, double z) {}
     private record Mount(String description) {}
     private record OrientationDiagnostic(String description) {}
     private record VectorDiagnostic(String description) {}
-    private record MergedSample(long timeNanos, RawLocation location, double baroAltitude, RawVector accelerometer, RawVector gravity, RawOrientation orientation) {}
+    private record MergedSample(long timeNanos, RawLocation location, long barometerTimeNanos, double baroAltitude, RawVector accelerometer, RawVector gravity, RawOrientation orientation, boolean barometerUpdated) {}
 }
