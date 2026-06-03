@@ -36,6 +36,9 @@ public final class AnimationPanel {
     private final JLabel accelerationForwardLabel = new JLabel("Acc forward: -");
     private final JLabel accelerationRightLabel = new JLabel("Acc right: -");
     private final JLabel accelerationUpLabel = new JLabel("Acc up: -");
+    private final JLabel baroClimbLabel = new JLabel("Baro climb: -");
+    private final JLabel baroVerticalAccelerationLabel = new JLabel("Baro vertical acc: -");
+    private final JLabel imuBaroVerticalDifferenceLabel = new JLabel("IMU/Baro vertical diff: -");
     private final JLabel gpsCourseLabel = new JLabel("GPS course: -");
     private final JLabel headingErrorLabel = new JLabel("Heading error: -");
     private final JLabel mountLabel = new JLabel("Forward axis: device -X");
@@ -62,6 +65,9 @@ public final class AnimationPanel {
         values.add(accelerationForwardLabel);
         values.add(accelerationRightLabel);
         values.add(accelerationUpLabel);
+        values.add(baroClimbLabel);
+        values.add(baroVerticalAccelerationLabel);
+        values.add(imuBaroVerticalDifferenceLabel);
         values.add(gpsCourseLabel);
         values.add(headingErrorLabel);
         values.add(mountLabel);
@@ -79,7 +85,7 @@ public final class AnimationPanel {
         root.add(values, BorderLayout.CENTER);
         root.add(controls, BorderLayout.SOUTH);
         frame.setContentPane(root);
-        frame.setSize(560, 460);
+        frame.setSize(620, 540);
         frame.setLocationByPlatform(true);
         frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
 
@@ -218,6 +224,9 @@ public final class AnimationPanel {
                 accelerationForwardLabel.setText("Acc forward: -");
                 accelerationRightLabel.setText("Acc right: -");
                 accelerationUpLabel.setText("Acc up: -");
+                baroClimbLabel.setText("Baro climb: -");
+                baroVerticalAccelerationLabel.setText("Baro vertical acc: -");
+                imuBaroVerticalDifferenceLabel.setText("IMU/Baro vertical diff: -");
                 gpsCourseLabel.setText("GPS course: -");
                 headingErrorLabel.setText("Heading error: -");
                 absoluteTimeLabel.setText("Absolute time: -");
@@ -232,6 +241,10 @@ public final class AnimationPanel {
             double headingError = Double.isNaN(gpsCourse) || Double.isNaN(point.headingRadians())
                     ? Double.NaN
                     : angleDiffDegrees(Math.toDegrees(point.headingRadians()), Math.toDegrees(gpsCourse));
+            double verticalDifference = Double.isNaN(point.accelerationUpMetersPerSecondSquared())
+                    || Double.isNaN(point.barometricVerticalAccelerationMetersPerSecondSquared())
+                    ? Double.NaN
+                    : point.accelerationUpMetersPerSecondSquared() - point.barometricVerticalAccelerationMetersPerSecondSquared();
 
             gpsLabel.setText(String.format("GPS: %.7f, %.7f", point.latitude(), point.longitude()));
             speedLabel.setText(String.format("Speed: %.2f m/s", point.speedMetersPerSecond()));
@@ -243,6 +256,9 @@ public final class AnimationPanel {
             accelerationForwardLabel.setText("Acc forward: " + acceleration(point.accelerationForwardMetersPerSecondSquared()));
             accelerationRightLabel.setText("Acc right: " + acceleration(point.accelerationRightMetersPerSecondSquared()));
             accelerationUpLabel.setText("Acc up: " + acceleration(point.accelerationUpMetersPerSecondSquared()));
+            baroClimbLabel.setText("Baro climb: " + velocity(point.barometricClimbRateMetersPerSecond()));
+            baroVerticalAccelerationLabel.setText("Baro vertical acc: " + acceleration(point.barometricVerticalAccelerationMetersPerSecondSquared()));
+            imuBaroVerticalDifferenceLabel.setText("IMU/Baro vertical diff: " + acceleration(verticalDifference));
             gpsCourseLabel.setText("GPS course: " + degrees(gpsCourse));
             headingErrorLabel.setText("Heading error: " + signedDegrees(headingError));
             absoluteTimeLabel.setText("Absolute time: " + absoluteTime(point));
@@ -273,6 +289,11 @@ public final class AnimationPanel {
     private String acceleration(double metersPerSecondSquared) {
         if (Double.isNaN(metersPerSecondSquared)) return "-";
         return String.format("%.3f m/s²", metersPerSecondSquared);
+    }
+
+    private String velocity(double metersPerSecond) {
+        if (Double.isNaN(metersPerSecond)) return "-";
+        return String.format("%.3f m/s", metersPerSecond);
     }
 
     private String signedDegrees(double degrees) {
