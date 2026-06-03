@@ -30,6 +30,12 @@ public final class AnimationPanel {
     private final JLabel absoluteHeightLabel = new JLabel("Barometric height MSL: -");
     private final JLabel absoluteTimeLabel = new JLabel("Absolute time: -");
     private final JLabel relativeTimeLabel = new JLabel("Relative time: -");
+    private final JLabel headingLabel = new JLabel("Heading: -");
+    private final JLabel pitchLabel = new JLabel("Pitch: -");
+    private final JLabel rollLabel = new JLabel("Roll: -");
+    private final JLabel gpsCourseLabel = new JLabel("GPS course: -");
+    private final JLabel headingErrorLabel = new JLabel("Heading error: -");
+    private final JLabel mountLabel = new JLabel("Forward axis: device -X");
     private final JSlider timeSlider = new JSlider(0, SLIDER_MAX, 0);
     private final JButton playButton = new JButton("Start");
     private final JComboBox<Integer> speedFactorBox = new JComboBox<>(new Integer[]{1, 2, 5, 10, 20, 50});
@@ -47,6 +53,12 @@ public final class AnimationPanel {
         values.add(speedLabel);
         values.add(heightLabel);
         values.add(absoluteHeightLabel);
+        values.add(headingLabel);
+        values.add(pitchLabel);
+        values.add(rollLabel);
+        values.add(gpsCourseLabel);
+        values.add(headingErrorLabel);
+        values.add(mountLabel);
         values.add(absoluteTimeLabel);
         values.add(relativeTimeLabel);
 
@@ -61,7 +73,7 @@ public final class AnimationPanel {
         root.add(values, BorderLayout.CENTER);
         root.add(controls, BorderLayout.SOUTH);
         frame.setContentPane(root);
-        frame.setSize(460, 260);
+        frame.setSize(520, 380);
         frame.setLocationByPlatform(true);
         frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
 
@@ -194,22 +206,68 @@ public final class AnimationPanel {
                 speedLabel.setText("Speed: -");
                 heightLabel.setText("Relative height: -");
                 absoluteHeightLabel.setText("Barometric height MSL: -");
+                headingLabel.setText("Heading: -");
+                pitchLabel.setText("Pitch: -");
+                rollLabel.setText("Roll: -");
+                gpsCourseLabel.setText("GPS course: -");
+                headingErrorLabel.setText("Heading error: -");
                 absoluteTimeLabel.setText("Absolute time: -");
                 relativeTimeLabel.setText("Relative time: -");
                 return;
             }
 
-            TrackPoint point = snapshot.points().get(Math.max(0, Math.min(index, snapshot.points().size() - 1)));
+            List<TrackPoint> points = snapshot.points();
+            int safeIndex = Math.max(0, Math.min(index, points.size() - 1));
+            TrackPoint point = points.get(safeIndex);
+            double gpsCourse = gpsCourse(points, safeIndex);
+            double headingError = Double.isNaN(gpsCourse) || Double.isNaN(point.headingRadians())
+                    ? Double.NaN
+                    : angleDiffDegrees(Math.toDegrees(point.headingRadians()), Math.toDegrees(gpsCourse));
+
             gpsLabel.setText(String.format("GPS: %.7f, %.7f", point.latitude(), point.longitude()));
             speedLabel.setText(String.format("Speed: %.2f m/s", point.speedMetersPerSecond()));
             heightLabel.setText(String.format("Relative height: %.2f m", point.zMeters()));
             absoluteHeightLabel.setText(String.format("Barometric height MSL: %.2f m", point.barometricAltitudeMeters()));
+            headingLabel.setText("Heading: " + degrees(point.headingRadians()));
+            pitchLabel.setText("Pitch: " + degrees(point.pitchRadians()));
+            rollLabel.setText("Roll: " + degrees(point.rollRadians()));
+            gpsCourseLabel.setText("GPS course: " + degrees(gpsCourse));
+            headingErrorLabel.setText("Heading error: " + signedDegrees(headingError));
             absoluteTimeLabel.setText("Absolute time: " + absoluteTime(point));
             relativeTimeLabel.setText(String.format("Relative time: %.2f / %.2f s", seconds, duration));
             internalSliderUpdate = true;
             timeSlider.setValue(duration <= 0.0 ? 0 : (int) Math.round(SLIDER_MAX * seconds / duration));
             internalSliderUpdate = false;
         });
+    }
+
+    private double gpsCourse(List<TrackPoint> points, int index) {
+        if (points.size() < 2) return Double.NaN;
+        int previousIndex = Math.max(0, index - 1);
+        int nextIndex = Math.min(points.size() - 1, index + 1);
+        TrackPoint previous = points.get(previousIndex);
+        TrackPoint next = points.get(nextIndex);
+        double dx = next.xMeters() - previous.xMeters();
+        double dy = next.yMeters() - previous.yMeters();
+        if (Math.hypot(dx, dy) < 0.001) return Double.NaN;
+        return Math.atan2(dx, dy);
+    }
+
+    private String degrees(double radians) {
+        if (Double.isNaN(radians)) return "-";
+        return String.format("%.1f°", Math.toDegrees(radians));
+    }
+
+    private String signedDegrees(double degrees) {
+        if (Double.isNaN(degrees)) return "-";
+        return String.format("%+.1f°", degrees);
+    }
+
+    private double angleDiffDegrees(double a, double b) {
+        double diff = a - b;
+        while (diff > 180.0) diff -= 360.0;
+        while (diff < -180.0) diff += 360.0;
+        return diff;
     }
 
     private String absoluteTime(TrackPoint point) {
