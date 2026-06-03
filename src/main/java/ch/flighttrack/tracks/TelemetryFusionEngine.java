@@ -37,7 +37,7 @@ final class TelemetryFusionEngine {
         System.out.printf("Telemetry fusion: locations=%d, barometer=%d, accelerometer=%d, accelUncalibrated=%d, gravity=%d, magnetometer=%d, magnetometerUncalibrated=%d, orientation=%d, fusedPoints=%d%n",
                 locations.size(), barometer.size(), accelerometer.size(), accelerometerUncalibrated.size(), gravity.size(), magnetometer.size(), magnetometerUncalibrated.size(), orientation.size(), points.size());
         System.out.println("Telemetry fusion mode: conservative multi-rate timeline; GPS is horizontal truth, barometer is vertical truth.");
-        System.out.println("Plane symbol heading, pitch and roll use the selected orientation mount when quaternion data is available.");
+        System.out.println("Plane symbol attitude uses the selected orientation mount and carries the last valid quaternion attitude forward.");
         System.out.printf("Phone mount diagnostic: %s%n", mount.description());
         System.out.printf("Orientation diagnostic: %s%n", orientationDiagnostic.description());
         System.out.printf("Attitude/GPS course diagnostic: %s%n", attitudeDiagnostic);
@@ -66,6 +66,7 @@ final class TelemetryFusionEngine {
                                          GroundReference reference, long startTime) {
         java.util.ArrayList<TrackPoint> result = new java.util.ArrayList<>();
         MergedCursor cursor = new MergedCursor(locations, barometer, accelerometer, gravity, orientation, startTime);
+        AttitudeState attitude = initialAttitude(orientation, startTime);
         long firstTime = -1L;
         MergedSample sample;
         while ((sample = cursor.next()) != null) {
@@ -75,15 +76,20 @@ final class TelemetryFusionEngine {
             double y = gpsY(location, reference);
             double z = sample.baroAltitude() - reference.barometricAltitudeMeters();
             double seconds = (sample.timeNanos() - firstTime) / 1_000_000_000.0;
-            double heading = OrientationMath.selectedForwardHeading(sample.orientation());
-            double pitch = OrientationMath.selectedForwardPitch(sample.orientation());
-            double roll = OrientationMath.selectedRoll(sample.orientation());
+            attitude = attitude.withLatest(sample.orientation());
             boolean moving = Math.abs(z) > 1.0 || Math.hypot(x, y) > 5.0
                     || (!Double.isNaN(location.speedMetersPerSecond()) && location.speedMetersPerSecond() > 1.5);
             result.add(new TrackPoint(sample.timeNanos(), seconds, location.latitude(), location.longitude(),
-                    location.gpsAltitudeMeters(), sample.baroAltitude(), location.speedMetersPerSecond(), x, y, z, moving, heading, pitch, roll));
+                    location.gpsAltitudeMeters(), sample.baroAltitude(), location.speedMetersPerSecond(), x, y, z,
+                    moving, attitude.heading(), attitude.pitch(), attitude.roll()));
         }
         return List.copyOf(result);
+    }
+
+    private AttitudeState initialAttitude(List<RawOrientation> orientation, long startTime) {
+        int index = firstOrientationAtOrAfter(orientation, startTime);
+        if (index >= orientation.size()) return new AttitudeState(Double.NaN, Double.NaN, Double.NaN);
+        return new AttitudeState(Double.NaN, Double.NaN, Double.NaN).withLatest(orientation.get(index));
     }
 
     private AccelBias estimateBias(List<RawVector> samples, long startTime) {
@@ -213,6 +219,19 @@ final class TelemetryFusionEngine {
                 if (lastLocation != null && lastBarometer != null) return new MergedSample(next, lastLocation, lastBarometer.altitudeMeters(), lastAccelerometer, lastGravity, lastOrientation);
             }
             return null;
+        }
+    }
+
+    private record AttitudeState(double heading, double pitch, double roll) {
+        AttitudeState withLatest(RawOrientation orientation) {
+            double nextHeading = OrientationMath.selectedForwardHeading(orientation);
+            double nextPitch = OrientationMath.selectedForwardPitch(orientation);
+            double nextRoll = OrientationMath.selectedRoll(orientation);
+            return new AttitudeState(
+                    Double.isNaN(nextHeading) ? heading : nextHeading,
+                    Double.isNaN(nextPitch) ? pitch : nextPitch,
+                    Double.isNaN(nextRoll) ? roll : nextRoll
+            );
         }
     }
 
