@@ -33,6 +33,9 @@ public final class AnimationPanel {
     private final JLabel headingLabel = new JLabel("Heading: -");
     private final JLabel pitchLabel = new JLabel("Pitch: -");
     private final JLabel rollLabel = new JLabel("Roll: -");
+    private final JLabel accelerationForwardLabel = new JLabel("Acc forward: -");
+    private final JLabel accelerationRightLabel = new JLabel("Acc right: -");
+    private final JLabel accelerationUpLabel = new JLabel("Acc up: -");
     private final JLabel gpsCourseLabel = new JLabel("GPS course: -");
     private final JLabel headingErrorLabel = new JLabel("Heading error: -");
     private final JLabel mountLabel = new JLabel("Forward axis: device -X");
@@ -56,6 +59,9 @@ public final class AnimationPanel {
         values.add(headingLabel);
         values.add(pitchLabel);
         values.add(rollLabel);
+        values.add(accelerationForwardLabel);
+        values.add(accelerationRightLabel);
+        values.add(accelerationUpLabel);
         values.add(gpsCourseLabel);
         values.add(headingErrorLabel);
         values.add(mountLabel);
@@ -73,7 +79,7 @@ public final class AnimationPanel {
         root.add(values, BorderLayout.CENTER);
         root.add(controls, BorderLayout.SOUTH);
         frame.setContentPane(root);
-        frame.setSize(520, 380);
+        frame.setSize(560, 460);
         frame.setLocationByPlatform(true);
         frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
 
@@ -209,6 +215,9 @@ public final class AnimationPanel {
                 headingLabel.setText("Heading: -");
                 pitchLabel.setText("Pitch: -");
                 rollLabel.setText("Roll: -");
+                accelerationForwardLabel.setText("Acc forward: -");
+                accelerationRightLabel.setText("Acc right: -");
+                accelerationUpLabel.setText("Acc up: -");
                 gpsCourseLabel.setText("GPS course: -");
                 headingErrorLabel.setText("Heading error: -");
                 absoluteTimeLabel.setText("Absolute time: -");
@@ -231,6 +240,9 @@ public final class AnimationPanel {
             headingLabel.setText("Heading: " + degrees(point.headingRadians()));
             pitchLabel.setText("Pitch: " + degrees(point.pitchRadians()));
             rollLabel.setText("Roll: " + degrees(point.rollRadians()));
+            accelerationForwardLabel.setText("Acc forward: " + acceleration(point.accelerationForwardMetersPerSecondSquared()));
+            accelerationRightLabel.setText("Acc right: " + acceleration(point.accelerationRightMetersPerSecondSquared()));
+            accelerationUpLabel.setText("Acc up: " + acceleration(point.accelerationUpMetersPerSecondSquared()));
             gpsCourseLabel.setText("GPS course: " + degrees(gpsCourse));
             headingErrorLabel.setText("Heading error: " + signedDegrees(headingError));
             absoluteTimeLabel.setText("Absolute time: " + absoluteTime(point));
@@ -256,6 +268,11 @@ public final class AnimationPanel {
     private String degrees(double radians) {
         if (Double.isNaN(radians)) return "-";
         return String.format("%.1f°", Math.toDegrees(radians));
+    }
+
+    private String acceleration(double metersPerSecondSquared) {
+        if (Double.isNaN(metersPerSecondSquared)) return "-";
+        return String.format("%.3f m/s²", metersPerSecondSquared);
     }
 
     private String signedDegrees(double degrees) {
